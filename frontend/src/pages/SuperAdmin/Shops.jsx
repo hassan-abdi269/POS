@@ -12,8 +12,7 @@ import {
   RefreshCw,
   AlertCircle
 } from 'lucide-react';
-
-const API_URL = 'http://localhost:5000/api';
+import { shopService, authService } from '../../service/api'; // ✅ Remove superAdminService
 
 const Shops = () => {
   const [shops, setShops] = useState([]);
@@ -32,101 +31,138 @@ const Shops = () => {
   const [showShopDetails, setShowShopDetails] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
+    // Check if user is super admin
+    if (!authService.isSuperAdmin()) {
+      setError('Access denied. Super admin privileges required.');
+      return;
+    }
     loadShops();
-    loadStats();
   }, []);
 
   const loadShops = async () => {
     setIsLoading(true);
     setError('');
     try {
-      // Build query string
-      const params = new URLSearchParams();
-      if (searchTerm) params.append('search', searchTerm);
-      if (filterStatus !== 'all') params.append('status', filterStatus);
-      if (filterSubscription !== 'all') params.append('subscription', filterSubscription);
+      // Get all shops from API service
+      const response = await shopService.getAllShops();
       
-      const response = await fetch(`${API_URL}/shops?${params.toString()}`, {
-        credentials: 'include'
-      });
+      // ✅ Extract shops array from response
+      const allShops = response?.shops || response || [];
       
-      if (!response.ok) {
-        throw new Error('Failed to load shops');
+      // Apply filters client-side
+      let filteredShops = allShops;
+      
+      if (searchTerm) {
+        const term = searchTerm.toLowerCase();
+        filteredShops = filteredShops.filter(shop => 
+          shop.name?.toLowerCase().includes(term) ||
+          shop.email?.toLowerCase().includes(term) ||
+          shop.owner?.toLowerCase().includes(term)
+        );
       }
       
-      const data = await response.json();
-      if (data.success) {
-        setShops(data.shops);
-      } else {
-        setError(data.error || 'Failed to load shops');
+      if (filterStatus !== 'all') {
+        filteredShops = filteredShops.filter(shop => shop.status === filterStatus);
       }
+      
+      if (filterSubscription !== 'all') {
+        filteredShops = filteredShops.filter(shop => shop.subscription === filterSubscription);
+      }
+      
+      setShops(filteredShops);
+      
+      // ✅ Calculate stats from shops
+      calculateStats(allShops);
+      
     } catch (err) {
       console.error('Error loading shops:', err);
-      setError('Failed to connect to server');
+      setError(err.response?.data?.error || 'Failed to load shops. Please try again.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loadStats = async () => {
-    try {
-      const response = await fetch(`${API_URL}/shops/stats`, {
-        credentials: 'include'
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to load stats');
-      }
-      
-      const data = await response.json();
-      if (data.success) {
-        setStats(data.stats);
-      }
-    } catch (err) {
-      console.error('Error loading stats:', err);
-    }
+  // ✅ Calculate stats from shops data
+  const calculateStats = (shopsData) => {
+    const total = shopsData.length;
+    const active = shopsData.filter(s => s.status === 'active').length;
+    const inactive = shopsData.filter(s => s.status === 'inactive').length;
+    const premium = shopsData.filter(s => s.subscription === 'premium').length;
+    const totalRevenue = shopsData.reduce((sum, shop) => sum + (shop.revenue || 0), 0);
+    
+    setStats({
+      total,
+      active,
+      inactive,
+      premium,
+      totalRevenue
+    });
   };
 
   const handleStatusToggle = async (shopId) => {
     try {
       const shop = shops.find(s => s.id === shopId);
+      if (!shop) return;
+      
       const newStatus = shop.status === 'active' ? 'inactive' : 'active';
       
-      const response = await fetch(`${API_URL}/shops/${shopId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ status: newStatus })
-      });
+      await shopService.updateShop(shopId, { status: newStatus });
       
-      if (!response.ok) {
-        throw new Error('Failed to update status');
-      }
+      // Update local state
+      const updatedShops = shops.map(s => 
+        s.id === shopId ? { ...s, status: newStatus } : s
+      );
+      setShops(updatedShops);
       
-      const data = await response.json();
-      if (data.success) {
-        // Update local state
-        setShops(shops.map(s => 
-          s.id === shopId ? { ...s, status: newStatus } : s
-        ));
-        loadStats(); // Refresh stats
-      }
+      // ✅ Recalculate stats
+      const allShops = await shopService.getAllShops();
+      calculateStats(allShops?.shops || allShops || []);
+      
     } catch (err) {
       console.error('Error toggling status:', err);
-      alert('Failed to update shop status');
+      setError('Failed to update shop status. Please try again.');
+      setTimeout(() => setError(''), 5000);
     }
   };
 
-  // Load shops when filters change
-  useEffect(() => {
-    loadShops();
-  }, [searchTerm, filterStatus, filterSubscription]);
+  const handleDeleteShop = async (shopId) => {
+    if (!window.confirm('Are you sure you want to delete this shop? This action cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      setIsDeleting(true);
+      await shopService.deleteShop(shopId);
+      
+      // Remove from local state
+      setShops(shops.filter(s => s.id !== shopId));
+      
+      // ✅ Recalculate stats
+      const allShops = await shopService.getAllShops();
+      calculateStats(allShops?.shops || allShops || []);
+      
+      // Close details modal if open
+      if (showShopDetails && showShopDetails.id === shopId) {
+        setShowShopDetails(null);
+      }
+    } catch (err) {
+      console.error('Error deleting shop:', err);
+      setError('Failed to delete shop. Please try again.');
+      setTimeout(() => setError(''), 5000);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
-  const filteredShops = shops; // Already filtered by API
+  // Reload shops when filters change
+  useEffect(() => {
+    if (!isLoading) {
+      loadShops();
+    }
+  }, [searchTerm, filterStatus, filterSubscription]);
 
   const subscriptionTypes = ['basic', 'standard', 'premium'];
 
@@ -140,7 +176,7 @@ const Shops = () => {
         </div>
         <div className="flex gap-3">
           <button
-            onClick={() => { loadShops(); loadStats(); }}
+            onClick={loadShops}
             className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors flex items-center gap-2"
           >
             <RefreshCw className="h-5 w-5" />
@@ -241,7 +277,7 @@ const Shops = () => {
             ))}
           </select>
           <span className="text-sm text-gray-500 self-center">
-            Showing {filteredShops.length} shops
+            Showing {shops.length} shops
           </span>
           {searchTerm && (
             <button
@@ -276,13 +312,15 @@ const Shops = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {filteredShops.map((shop) => (
+                  {shops.map((shop) => (
                     <tr key={shop.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-6 py-4">
                         <div>
                           <div className="font-medium text-gray-900">{shop.name}</div>
                           <div className="text-sm text-gray-500">ID: #{String(shop.id).padStart(4, '0')}</div>
-                          <div className="text-xs text-gray-400">{shop.createdAt}</div>
+                          <div className="text-xs text-gray-400">
+                            {shop.createdAt ? new Date(shop.createdAt).toLocaleDateString() : 'N/A'}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -308,7 +346,7 @@ const Shops = () => {
                           ) : (
                             <XCircle className="h-3 w-3" />
                           )}
-                          {shop.status.charAt(0).toUpperCase() + shop.status.slice(1)}
+                          {shop.status ? shop.status.charAt(0).toUpperCase() + shop.status.slice(1) : 'Unknown'}
                         </button>
                       </td>
                       <td className="px-6 py-4">
@@ -319,7 +357,7 @@ const Shops = () => {
                             ? 'bg-blue-100 text-blue-800'
                             : 'bg-gray-100 text-gray-800'
                         }`}>
-                          {shop.subscription.charAt(0).toUpperCase() + shop.subscription.slice(1)}
+                          {shop.subscription ? shop.subscription.charAt(0).toUpperCase() + shop.subscription.slice(1) : 'Basic'}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -343,11 +381,11 @@ const Shops = () => {
                           >
                             <Edit className="h-5 w-5" />
                           </button>
-                          {/* Delete button disabled - no functionality */}
                           <button 
-                            className="p-1.5 text-gray-400 cursor-not-allowed rounded-lg transition-colors"
-                            title="Delete disabled"
-                            disabled
+                            onClick={() => handleDeleteShop(shop.id)}
+                            disabled={isDeleting}
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                            title="Delete Shop"
                           >
                             <Trash2 className="h-5 w-5" />
                           </button>
@@ -360,7 +398,7 @@ const Shops = () => {
             </div>
 
             {/* Empty State */}
-            {filteredShops.length === 0 && (
+            {shops.length === 0 && (
               <div className="text-center py-12">
                 <Store className="h-16 w-16 text-gray-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-900">No shops found</h3>
@@ -385,7 +423,7 @@ const Shops = () => {
       {showAddShop && (
         <AddShopModal 
           onClose={() => setShowAddShop(false)} 
-          onSuccess={() => { loadShops(); loadStats(); }}
+          onSuccess={() => { loadShops(); }}
         />
       )}
 
@@ -394,7 +432,7 @@ const Shops = () => {
         <EditShopModal 
           shop={showEditShop} 
           onClose={() => setShowEditShop(null)}
-          onSuccess={() => { loadShops(); loadStats(); }}
+          onSuccess={() => { loadShops(); }}
         />
       )}
 
@@ -407,7 +445,7 @@ const Shops = () => {
             setShowShopDetails(null);
             setShowEditShop(showShopDetails);
           }}
-          // Remove onDelete prop - no delete functionality
+          onDelete={handleDeleteShop}
         />
       )}
     </div>
@@ -434,26 +472,12 @@ const AddShopModal = ({ onClose, onSuccess }) => {
     setError('');
     
     try {
-      const response = await fetch('http://localhost:5000/api/shops', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData)
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        onSuccess();
-        onClose();
-      } else {
-        setError(data.error || 'Failed to register shop');
-      }
+      await shopService.createShop(formData);
+      onSuccess();
+      onClose();
     } catch (err) {
       console.error('Error creating shop:', err);
-      setError('Failed to connect to server');
+      setError(err.response?.data?.error || 'Failed to register shop. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -594,7 +618,7 @@ const EditShopModal = ({ shop, onClose, onSuccess }) => {
     phone: shop.phone,
     address: shop.address || '',
     owner: shop.owner,
-    subscription: shop.subscription,
+    subscription: shop.subscription || 'basic',
     password: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -612,26 +636,12 @@ const EditShopModal = ({ shop, onClose, onSuccess }) => {
         delete updateData.password;
       }
       
-      const response = await fetch(`http://localhost:5000/api/shops/${shop.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(updateData)
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        onSuccess();
-        onClose();
-      } else {
-        setError(data.error || 'Failed to update shop');
-      }
+      await shopService.updateShop(shop.id, updateData);
+      onSuccess();
+      onClose();
     } catch (err) {
       console.error('Error updating shop:', err);
-      setError('Failed to connect to server');
+      setError(err.response?.data?.error || 'Failed to update shop. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -758,8 +768,18 @@ const EditShopModal = ({ shop, onClose, onSuccess }) => {
   );
 };
 
-// Shop Details Modal Component - Updated without delete functionality
-const ShopDetailsModal = ({ shop, onClose, onEdit }) => {
+// Shop Details Modal Component
+const ShopDetailsModal = ({ shop, onClose, onEdit, onDelete }) => {
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (window.confirm('Are you sure you want to delete this shop? This action cannot be undone.')) {
+      setIsDeleting(true);
+      await onDelete(shop.id);
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -783,7 +803,7 @@ const ShopDetailsModal = ({ shop, onClose, onEdit }) => {
               'bg-yellow-100 text-yellow-800'
             }`}>
               {shop.status === 'active' ? <CheckCircle className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
-              {shop.status.charAt(0).toUpperCase() + shop.status.slice(1)}
+              {shop.status ? shop.status.charAt(0).toUpperCase() + shop.status.slice(1) : 'Unknown'}
             </span>
           </div>
           <div>
@@ -815,7 +835,7 @@ const ShopDetailsModal = ({ shop, onClose, onEdit }) => {
                 ? 'bg-blue-100 text-blue-800'
                 : 'bg-gray-100 text-gray-800'
             }`}>
-              {shop.subscription.charAt(0).toUpperCase() + shop.subscription.slice(1)}
+              {shop.subscription ? shop.subscription.charAt(0).toUpperCase() + shop.subscription.slice(1) : 'Basic'}
             </span>
           </div>
           <div>
@@ -828,7 +848,7 @@ const ShopDetailsModal = ({ shop, onClose, onEdit }) => {
           </div>
           <div>
             <p className="text-sm text-gray-500">Created</p>
-            <p className="font-medium">{shop.createdAt}</p>
+            <p className="font-medium">{shop.createdAt ? new Date(shop.createdAt).toLocaleDateString() : 'N/A'}</p>
           </div>
           <div>
             <p className="text-sm text-gray-500">Last Active</p>
@@ -842,6 +862,13 @@ const ShopDetailsModal = ({ shop, onClose, onEdit }) => {
             className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors"
           >
             Edit Shop
+          </button>
+          <button 
+            onClick={handleDelete}
+            disabled={isDeleting}
+            className="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+          >
+            {isDeleting ? 'Deleting...' : 'Delete Shop'}
           </button>
           <button onClick={onClose} className="flex-1 bg-gray-200 text-gray-800 py-2 rounded-lg hover:bg-gray-300 transition-colors">
             Close

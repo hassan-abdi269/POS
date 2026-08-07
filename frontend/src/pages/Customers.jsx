@@ -1,3 +1,4 @@
+// src/pages/Customers.jsx
 import React, { useState, useEffect } from 'react';
 import { 
   Search, 
@@ -17,8 +18,10 @@ import {
   Eye,
   X,
   Save,
-  MapPin
+  MapPin,
+  AlertCircle
 } from 'lucide-react';
+import { customerService, authService } from '../service/api';
 
 const Customers = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -62,25 +65,35 @@ const Customers = () => {
     notes: ''
   });
 
+  // Get current shop ID
+  const getShopId = () => {
+    const user = authService.getCurrentUser();
+    return user?.shopId;
+  };
+
   // Fetch customers
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams();
-      if (searchTerm) params.append('search', searchTerm);
-      if (selectedStatus !== 'All') params.append('status', selectedStatus);
-      if (selectedTier !== 'All') params.append('tier', selectedTier);
+      setError('');
       
-      const response = await fetch(`http://localhost:5000/api/customers?${params.toString()}`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setCustomerData(data);
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
+
+      // Build params for filtering
+      const params = {};
+      if (searchTerm) params.search = searchTerm;
+      if (selectedStatus !== 'All') params.status = selectedStatus;
+      if (selectedTier !== 'All') params.tier = selectedTier;
+
+      const data = await customerService.getAllCustomers(shopId, params);
+      setCustomerData(data);
     } catch (error) {
       console.error('Error fetching customers:', error);
-      setError('Failed to load customers');
+      setError(error.response?.data?.error || 'Failed to load customers');
     } finally {
       setLoading(false);
     }
@@ -89,13 +102,36 @@ const Customers = () => {
   // Fetch stats
   const fetchStats = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/customers/stats', {
-        credentials: 'include'
+      const shopId = getShopId();
+      if (!shopId) return;
+
+      // Get all customers to calculate stats
+      const customers = await customerService.getAllCustomers(shopId);
+      
+      const total = customers.length;
+      const active = customers.filter(c => c.status === 'Active' || c.status === 'active').length;
+      const inactive = customers.filter(c => c.status === 'Inactive' || c.status === 'inactive').length;
+      const total_spent = customers.reduce((sum, c) => sum + (c.total_spent || 0), 0);
+      const total_orders = customers.reduce((sum, c) => sum + (c.total_orders || 0), 0);
+      const average_spent = total > 0 ? total_spent / total : 0;
+      
+      // Tier breakdown
+      const tier_breakdown = {
+        Platinum: customers.filter(c => c.tier === 'Platinum' || c.tier === 'platinum').length,
+        Gold: customers.filter(c => c.tier === 'Gold' || c.tier === 'gold').length,
+        Silver: customers.filter(c => c.tier === 'Silver' || c.tier === 'silver').length,
+        Bronze: customers.filter(c => c.tier === 'Bronze' || c.tier === 'bronze').length
+      };
+
+      setStats({
+        total,
+        active,
+        inactive,
+        total_spent,
+        total_orders,
+        average_spent,
+        tier_breakdown
       });
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-      }
     } catch (error) {
       console.error('Error fetching stats:', error);
     }
@@ -110,7 +146,6 @@ const Customers = () => {
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchCustomers();
-      fetchStats();
     }, 500);
     return () => clearTimeout(timer);
   }, [searchTerm, selectedStatus, selectedTier]);
@@ -121,32 +156,23 @@ const Customers = () => {
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch('http://localhost:5000/api/customers', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess('Customer added successfully!');
-        setShowAddModal(false);
-        resetForm();
-        fetchCustomers();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to add customer');
-        setTimeout(() => setError(''), 5000);
-      }
+    try {
+      await customerService.createCustomer(shopId, formData);
+      setSuccess('Customer added successfully!');
+      setShowAddModal(false);
+      resetForm();
+      await fetchCustomers();
+      await fetchStats();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error adding customer:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to add customer');
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -157,32 +183,23 @@ const Customers = () => {
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch(`http://localhost:5000/api/customers/${selectedCustomer.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess('Customer updated successfully!');
-        setShowEditModal(false);
-        resetForm();
-        fetchCustomers();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to update customer');
-        setTimeout(() => setError(''), 5000);
-      }
+    try {
+      await customerService.updateCustomer(shopId, selectedCustomer.id, formData);
+      setSuccess('Customer updated successfully!');
+      setShowEditModal(false);
+      resetForm();
+      await fetchCustomers();
+      await fetchStats();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error updating customer:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to update customer');
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -190,25 +207,21 @@ const Customers = () => {
   // Handle delete customer
   const handleDeleteCustomer = async (customerId) => {
     if (window.confirm('Are you sure you want to deactivate this customer?')) {
-      try {
-        const response = await fetch(`http://localhost:5000/api/customers/${customerId}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
 
-        if (response.ok) {
-          setSuccess('Customer deactivated successfully!');
-          fetchCustomers();
-          fetchStats();
-          setTimeout(() => setSuccess(''), 5000);
-        } else {
-          const errorData = await response.json();
-          setError(errorData.error || 'Failed to deactivate customer');
-          setTimeout(() => setError(''), 5000);
-        }
+      try {
+        await customerService.deleteCustomer(shopId, customerId);
+        setSuccess('Customer deactivated successfully!');
+        await fetchCustomers();
+        await fetchStats();
+        setTimeout(() => setSuccess(''), 5000);
       } catch (error) {
         console.error('Error deleting customer:', error);
-        setError('Network error. Please check server connection.');
+        setError(error.response?.data?.error || 'Failed to deactivate customer');
         setTimeout(() => setError(''), 5000);
       }
     }
@@ -237,17 +250,17 @@ const Customers = () => {
   const handleEdit = (customer) => {
     setSelectedCustomer(customer);
     setFormData({
-      first_name: customer.first_name,
-      last_name: customer.last_name,
-      email: customer.email,
-      phone: customer.phone,
+      first_name: customer.first_name || '',
+      last_name: customer.last_name || '',
+      email: customer.email || '',
+      phone: customer.phone || '',
       address: customer.address || '',
       city: customer.city || '',
       state: customer.state || '',
       country: customer.country || '',
       postal_code: customer.postal_code || '',
-      status: customer.status,
-      tier: customer.tier,
+      status: customer.status || 'Active',
+      tier: customer.tier || 'Bronze',
       notes: customer.notes || ''
     });
     setShowEditModal(true);
@@ -273,7 +286,7 @@ const Customers = () => {
   };
 
   const getStatusDot = (status) => {
-    return status === 'Active' ? 'bg-green-500' : 'bg-gray-400';
+    return status === 'Active' || status === 'active' ? 'bg-green-500' : 'bg-gray-400';
   };
 
   const getAvatarColor = (name) => {
@@ -290,9 +303,10 @@ const Customers = () => {
   return (
     <div>
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-          {error}
-          <button onClick={() => setError('')} className="ml-2 text-red-500 hover:text-red-700">×</button>
+        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="ml-auto text-red-500 hover:text-red-700">×</button>
         </div>
       )}
       {success && (
@@ -450,6 +464,7 @@ const Customers = () => {
                   <td colSpan="8" className="text-center py-12 text-gray-500">
                     <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                     <p className="text-lg font-medium">No customers found</p>
+                    <p className="text-sm mt-1">Try adjusting your search or filters</p>
                   </td>
                 </tr>
               ) : (
@@ -457,10 +472,10 @@ const Customers = () => {
                   <tr key={customer.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(customer.full_name)} flex items-center justify-center text-white font-semibold text-xs`}>
-                          {customer.first_name.charAt(0)}{customer.last_name.charAt(0)}
+                        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(customer.first_name + ' ' + customer.last_name)} flex items-center justify-center text-white font-semibold text-xs`}>
+                          {customer.first_name?.charAt(0)}{customer.last_name?.charAt(0)}
                         </div>
-                        <span className="font-medium text-gray-900">{customer.full_name}</span>
+                        <span className="font-medium text-gray-900">{customer.first_name} {customer.last_name}</span>
                       </div>
                     </td>
                     <td className="py-3 px-4">
@@ -475,19 +490,23 @@ const Customers = () => {
                         </div>
                       </div>
                     </td>
-                    <td className="py-3 px-4 text-gray-600">{new Date(customer.created_at).toLocaleDateString()}</td>
-                    <td className="py-3 px-4 text-gray-600">{customer.total_orders}</td>
-                    <td className="py-3 px-4 font-medium text-gray-900">KES {customer.total_spent.toFixed(2)}</td>
+                    <td className="py-3 px-4 text-gray-600">{customer.created_at ? new Date(customer.created_at).toLocaleDateString() : 'N/A'}</td>
+                    <td className="py-3 px-4 text-gray-600">{customer.total_orders || 0}</td>
+                    <td className="py-3 px-4 font-medium text-gray-900">KES {(customer.total_spent || 0).toFixed(2)}</td>
                     <td className="py-3 px-4">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                         <span className={`w-1.5 h-1.5 rounded-full ${getTierDot(customer.tier)}`}></span>
-                        {customer.tier}
+                        {customer.tier || 'Bronze'}
                       </span>
                     </td>
                     <td className="py-3 px-4">
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200">
+                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-gray-200 ${
+                        customer.status === 'Active' || customer.status === 'active' 
+                          ? 'bg-green-50 text-green-700 border-green-200' 
+                          : 'bg-gray-50 text-gray-700'
+                      }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${getStatusDot(customer.status)}`}></span>
-                        {customer.status}
+                        {customer.status || 'Active'}
                       </span>
                     </td>
                     <td className="py-3 px-2">
@@ -949,19 +968,23 @@ const Customers = () => {
 
             <div className="p-6 space-y-4">
               <div className="flex items-center gap-4 mb-4">
-                <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${getAvatarColor(selectedCustomer.full_name)} flex items-center justify-center text-white font-semibold text-2xl`}>
-                  {selectedCustomer.first_name.charAt(0)}{selectedCustomer.last_name.charAt(0)}
+                <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${getAvatarColor(selectedCustomer.first_name + ' ' + selectedCustomer.last_name)} flex items-center justify-center text-white font-semibold text-2xl`}>
+                  {selectedCustomer.first_name?.charAt(0)}{selectedCustomer.last_name?.charAt(0)}
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900">{selectedCustomer.full_name}</h3>
+                  <h3 className="text-xl font-bold text-gray-900">{selectedCustomer.first_name} {selectedCustomer.last_name}</h3>
                   <div className="flex items-center gap-2 mt-1">
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border border-gray-200`}>
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border border-gray-200 ${
+                      selectedCustomer.status === 'Active' || selectedCustomer.status === 'active'
+                        ? 'bg-green-50 text-green-700 border-green-200'
+                        : 'bg-gray-50 text-gray-700'
+                    }`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${getStatusDot(selectedCustomer.status)}`}></span>
-                      {selectedCustomer.status}
+                      {selectedCustomer.status || 'Active'}
                     </span>
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                       <span className={`w-1.5 h-1.5 rounded-full ${getTierDot(selectedCustomer.tier)}`}></span>
-                      {selectedCustomer.tier}
+                      {selectedCustomer.tier || 'Bronze'}
                     </span>
                   </div>
                 </div>
@@ -978,15 +1001,15 @@ const Customers = () => {
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Total Orders</p>
-                  <p className="font-medium text-gray-900">{selectedCustomer.total_orders}</p>
+                  <p className="font-medium text-gray-900">{selectedCustomer.total_orders || 0}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Total Spent</p>
-                  <p className="font-medium text-gray-900">KES {selectedCustomer.total_spent.toFixed(2)}</p>
+                  <p className="font-medium text-gray-900">KES {(selectedCustomer.total_spent || 0).toFixed(2)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Joined</p>
-                  <p className="font-medium text-gray-900">{new Date(selectedCustomer.created_at).toLocaleDateString()}</p>
+                  <p className="font-medium text-gray-900">{selectedCustomer.created_at ? new Date(selectedCustomer.created_at).toLocaleDateString() : 'N/A'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Last Activity</p>

@@ -1,266 +1,328 @@
 # routes/staff.py
-from flask import request, jsonify
-from flask_login import login_required, current_user
+
+from flask import Blueprint, request, jsonify, session
 from extensions import db
 from models.staff import Staff
+from models.shop import Shop
 from datetime import datetime
+from sqlalchemy.exc import IntegrityError
+import re
 
-def get_current_shop_id():
-    """Get the current shop ID from the logged-in user"""
-    if hasattr(current_user, 'id'):
-        return current_user.id
-    return None
+# Define the blueprint
+staff_bp = Blueprint('staff', __name__, url_prefix='/api/staff')
 
 def init_staff_routes(app):
-    
-    # ============ STAFF ROUTES ============
-    
-    @app.route('/api/staff', methods=['GET'])
-    @login_required
-    def get_staff():
-        """Get all staff members for the current shop only"""
-        try:
-            shop_id = get_current_shop_id()
-            if not shop_id:
-                return jsonify({'error': 'Shop not found'}), 401
-            
-            status = request.args.get('status')
-            role = request.args.get('role')
-            department = request.args.get('department')
-            search = request.args.get('search')
-            
-            # Start with shop filter
-            query = Staff.query.filter_by(shop_id=shop_id)
-            
-            if status:
-                query = query.filter_by(status=status)
-            
-            if role:
-                query = query.filter_by(role=role)
-            
-            if department:
-                query = query.filter_by(department=department)
-            
-            if search:
-                query = query.filter(
-                    db.or_(
-                        Staff.first_name.contains(search),
-                        Staff.last_name.contains(search),
-                        Staff.email.contains(search),
-                        Staff.employee_id.contains(search)
-                    )
+    """Initialize staff routes"""
+    app.register_blueprint(staff_bp)
+
+def generate_employee_id(shop_id):
+    """Generate a unique employee ID for a shop"""
+    count = Staff.query.filter_by(shop_id=shop_id).count()
+    return f"EMP-{shop_id:02d}-{count+1:04d}"
+
+def validate_email(email):
+    """Validate email format"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+# ============ STAFF ROUTES ============
+
+@staff_bp.route('', methods=['GET'])
+def get_all_staff():
+    """Get all staff members for a shop"""
+    try:
+        shop_id = request.args.get('shop_id')
+        if not shop_id:
+            return jsonify({'error': 'Shop ID is required'}), 400
+        
+        query = Staff.query.filter_by(shop_id=shop_id)
+        
+        if request.args.get('search'):
+            search = f"%{request.args.get('search')}%"
+            query = query.filter(
+                db.or_(
+                    Staff.first_name.like(search),
+                    Staff.last_name.like(search),
+                    Staff.email.like(search),
+                    Staff.employee_id.like(search)
                 )
-            
-            staff = query.order_by(Staff.created_at.desc()).all()
-            return jsonify([s.to_dict() for s in staff])
-            
-        except Exception as e:
-            print(f"Error fetching staff: {e}")
-            return jsonify({'error': str(e)}), 500
-    
-    @app.route('/api/staff/<int:staff_id>', methods=['GET'])
-    @login_required
-    def get_staff_member(staff_id):
-        """Get a specific staff member for the current shop"""
-        try:
-            shop_id = get_current_shop_id()
-            if not shop_id:
-                return jsonify({'error': 'Shop not found'}), 401
-            
-            staff = Staff.query.filter_by(id=staff_id, shop_id=shop_id).first()
-            if not staff:
-                return jsonify({'error': 'Staff member not found'}), 404
-            
-            return jsonify(staff.to_dict())
-            
-        except Exception as e:
-            print(f"Error fetching staff: {e}")
-            return jsonify({'error': str(e)}), 500
-    
-    @app.route('/api/staff', methods=['POST'])
-    @login_required
-    def create_staff():
-        """Create a new staff member for the current shop"""
-        try:
-            shop_id = get_current_shop_id()
-            if not shop_id:
-                return jsonify({'error': 'Shop not found'}), 401
-            
-            data = request.get_json()
-            
-            required = ['first_name', 'last_name', 'email', 'phone', 'role', 'department', 'join_date', 'salary']
-            missing = [f for f in required if f not in data]
-            if missing:
-                return jsonify({'error': f'Missing required fields: {", ".join(missing)}'}), 400
-            
-            # Check if email already exists in this shop
-            if Staff.query.filter_by(email=data['email'], shop_id=shop_id).first():
-                return jsonify({'error': 'Staff member with this email already exists in your shop'}), 400
-            
-            # Create staff member with shop_id
-            staff = Staff(
-                shop_id=shop_id,  # ADD THIS
-                first_name=data['first_name'],
-                last_name=data['last_name'],
-                email=data['email'],
-                phone=data['phone'],
-                address=data.get('address', ''),
-                city=data.get('city', ''),
-                state=data.get('state', ''),
-                country=data.get('country', ''),
-                postal_code=data.get('postal_code', ''),
-                role=data['role'],
-                department=data['department'],
-                join_date=datetime.strptime(data['join_date'], '%Y-%m-%d').date(),
-                salary=float(data['salary']),
-                status=data.get('status', 'Active'),
-                performance=data.get('performance', 'Good'),
-                tasks=data.get('tasks', 0),
-                notes=data.get('notes', '')
             )
-            
-            # Generate employee ID (now includes shop_id)
-            staff.employee_id = staff.generate_employee_id()
-            
-            db.session.add(staff)
-            db.session.commit()
-            
-            return jsonify(staff.to_dict()), 201
-            
-        except Exception as e:
-            db.session.rollback()
-            print(f"Error creating staff: {e}")
-            return jsonify({'error': str(e)}), 500
-    
-    @app.route('/api/staff/<int:staff_id>', methods=['PUT'])
-    @login_required
-    def update_staff(staff_id):
-        """Update a staff member for the current shop"""
-        try:
-            shop_id = get_current_shop_id()
-            if not shop_id:
-                return jsonify({'error': 'Shop not found'}), 401
-            
-            staff = Staff.query.filter_by(id=staff_id, shop_id=shop_id).first()
-            if not staff:
-                return jsonify({'error': 'Staff member not found'}), 404
-            
-            data = request.get_json()
-            
-            if 'first_name' in data:
-                staff.first_name = data['first_name']
-            if 'last_name' in data:
-                staff.last_name = data['last_name']
-            if 'email' in data:
-                existing = Staff.query.filter_by(email=data['email'], shop_id=shop_id).first()
-                if existing and existing.id != staff_id:
-                    return jsonify({'error': 'Email already in use'}), 400
-                staff.email = data['email']
-            if 'phone' in data:
-                staff.phone = data['phone']
-            if 'address' in data:
-                staff.address = data['address']
-            if 'city' in data:
-                staff.city = data['city']
-            if 'state' in data:
-                staff.state = data['state']
-            if 'country' in data:
-                staff.country = data['country']
-            if 'postal_code' in data:
-                staff.postal_code = data['postal_code']
-            if 'role' in data:
-                staff.role = data['role']
-            if 'department' in data:
-                staff.department = data['department']
-            if 'join_date' in data:
-                staff.join_date = datetime.strptime(data['join_date'], '%Y-%m-%d').date()
-            if 'salary' in data:
-                staff.salary = float(data['salary'])
-            if 'status' in data:
-                staff.status = data['status']
-            if 'performance' in data:
-                staff.performance = data['performance']
-            if 'tasks' in data:
-                staff.tasks = int(data['tasks'])
-            if 'notes' in data:
-                staff.notes = data['notes']
-            
-            db.session.commit()
-            return jsonify(staff.to_dict())
-            
-        except Exception as e:
-            db.session.rollback()
-            print(f"Error updating staff: {e}")
-            return jsonify({'error': str(e)}), 500
-    
-    @app.route('/api/staff/<int:staff_id>', methods=['DELETE'])
-    @login_required
-    def delete_staff(staff_id):
-        """Delete a staff member for the current shop (soft delete - mark as inactive)"""
-        try:
-            shop_id = get_current_shop_id()
-            if not shop_id:
-                return jsonify({'error': 'Shop not found'}), 401
-            
-            staff = Staff.query.filter_by(id=staff_id, shop_id=shop_id).first()
-            if not staff:
-                return jsonify({'error': 'Staff member not found'}), 404
-            
-            staff.status = 'Inactive'
-            db.session.commit()
-            
-            return jsonify({'message': 'Staff member deactivated successfully'})
-            
-        except Exception as e:
-            db.session.rollback()
-            print(f"Error deleting staff: {e}")
-            return jsonify({'error': str(e)}), 500
-    
-    # ============ STAFF STATS ============
-    
-    @app.route('/api/staff/stats', methods=['GET'])
-    @login_required
-    def get_staff_stats():
-        """Get staff statistics for the current shop only"""
-        try:
-            shop_id = get_current_shop_id()
-            if not shop_id:
-                return jsonify({'error': 'Shop not found'}), 401
-            
-            all_staff = Staff.query.filter_by(shop_id=shop_id).all()
-            active = Staff.query.filter_by(shop_id=shop_id, status='Active').count()
-            on_leave = Staff.query.filter_by(shop_id=shop_id, status='On Leave').count()
-            inactive = Staff.query.filter_by(shop_id=shop_id, status='Inactive').count()
-            
-            total_tasks = sum(s.tasks for s in all_staff)
-            total_salary = sum(s.salary for s in all_staff)
-            
-            # Role breakdown for this shop
-            role_breakdown = {}
-            for staff in all_staff:
-                if staff.role not in role_breakdown:
-                    role_breakdown[staff.role] = 0
-                role_breakdown[staff.role] += 1
-            
-            # Department breakdown for this shop
-            dept_breakdown = {}
-            for staff in all_staff:
-                if staff.department not in dept_breakdown:
-                    dept_breakdown[staff.department] = 0
-                dept_breakdown[staff.department] += 1
-            
+        
+        if request.args.get('status'):
+            query = query.filter_by(status=request.args.get('status'))
+        
+        if request.args.get('role'):
+            query = query.filter_by(role=request.args.get('role'))
+        
+        if request.args.get('department'):
+            query = query.filter_by(department=request.args.get('department'))
+        
+        staff = query.order_by(Staff.created_at.desc()).all()
+        
+        return jsonify([s.to_dict() for s in staff]), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@staff_bp.route('/<int:staff_id>', methods=['GET'])
+def get_staff(staff_id):
+    """Get a specific staff member"""
+    try:
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({'error': 'Staff not found'}), 404
+        
+        return jsonify(staff.to_dict()), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@staff_bp.route('', methods=['POST'])
+def create_staff():
+    """Create a new staff member"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['shop_id', 'first_name', 'last_name', 'email', 'phone', 'role', 'department', 'join_date', 'salary']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'error': f'{field} is required'}), 400
+        
+        if not validate_email(data['email']):
+            return jsonify({'error': 'Invalid email format'}), 400
+        
+        shop = Shop.query.get(data['shop_id'])
+        if not shop:
+            return jsonify({'error': 'Shop not found'}), 404
+        
+        # Check if email already exists in this shop
+        existing_staff = Staff.query.filter_by(
+            shop_id=data['shop_id'],
+            email=data['email'].strip().lower()
+        ).first()
+        
+        if existing_staff:
             return jsonify({
-                'total': len(all_staff),
-                'active': active,
-                'on_leave': on_leave,
-                'inactive': inactive,
-                'total_tasks': total_tasks,
-                'total_salary': float(total_salary),
-                'average_salary': float(total_salary / len(all_staff)) if all_staff else 0,
-                'role_breakdown': role_breakdown,
-                'department_breakdown': dept_breakdown
-            })
+                'error': f'Email {data["email"]} is already registered in this shop. Please use a different email.'
+            }), 400
+        
+        employee_id = generate_employee_id(data['shop_id'])
+        
+        staff = Staff(
+            shop_id=data['shop_id'],
+            employee_id=employee_id,
+            first_name=data['first_name'].strip(),
+            last_name=data['last_name'].strip(),
+            email=data['email'].strip().lower(),
+            phone=data['phone'].strip(),
+            address=data.get('address', '').strip(),
+            city=data.get('city', '').strip(),
+            state=data.get('state', '').strip(),
+            country=data.get('country', '').strip(),
+            postal_code=data.get('postal_code', '').strip(),
+            role=data['role'],
+            department=data['department'],
+            join_date=datetime.strptime(data['join_date'], '%Y-%m-%d').date(),
+            salary=float(data['salary']),
+            status=data.get('status', 'Active'),
+            performance=data.get('performance', 'Good'),
+            tasks=int(data.get('tasks', 0)),
+            notes=data.get('notes', '').strip()
+        )
+        
+        db.session.add(staff)
+        db.session.commit()
+        
+        return jsonify(staff.to_dict()), 201
+        
+    except IntegrityError as e:
+        db.session.rollback()
+        if 'uq_staff_shop_email' in str(e):
+            return jsonify({
+                'error': 'This email is already registered in this shop. Please use a different email.'
+            }), 400
+        if 'uq_staff_shop_employee' in str(e):
+            return jsonify({
+                'error': 'Employee ID conflict. Please try again.'
+            }), 400
+        return jsonify({'error': 'Database error occurred'}), 500
+        
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': f'Invalid data format: {str(e)}'}), 400
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@staff_bp.route('/<int:staff_id>', methods=['PUT'])
+def update_staff(staff_id):
+    """Update an existing staff member"""
+    try:
+        data = request.get_json()
+        staff = Staff.query.get(staff_id)
+        
+        if not staff:
+            return jsonify({'error': 'Staff not found'}), 404
+        
+        if data.get('email') and data['email'] != staff.email:
+            if not validate_email(data['email']):
+                return jsonify({'error': 'Invalid email format'}), 400
             
-        except Exception as e:
-            print(f"Error fetching staff stats: {e}")
-            return jsonify({'error': str(e)}), 500
+            existing_staff = Staff.query.filter(
+                Staff.shop_id == staff.shop_id,
+                Staff.email == data['email'].strip().lower(),
+                Staff.id != staff_id
+            ).first()
+            
+            if existing_staff:
+                return jsonify({
+                    'error': f'Email {data["email"]} is already registered in this shop. Please use a different email.'
+                }), 400
+        
+        if data.get('first_name'):
+            staff.first_name = data['first_name'].strip()
+        if data.get('last_name'):
+            staff.last_name = data['last_name'].strip()
+        if data.get('email'):
+            staff.email = data['email'].strip().lower()
+        if data.get('phone'):
+            staff.phone = data['phone'].strip()
+        if data.get('address') is not None:
+            staff.address = data['address'].strip()
+        if data.get('city') is not None:
+            staff.city = data['city'].strip()
+        if data.get('state') is not None:
+            staff.state = data['state'].strip()
+        if data.get('country') is not None:
+            staff.country = data['country'].strip()
+        if data.get('postal_code') is not None:
+            staff.postal_code = data['postal_code'].strip()
+        if data.get('role'):
+            staff.role = data['role']
+        if data.get('department'):
+            staff.department = data['department']
+        if data.get('join_date'):
+            staff.join_date = datetime.strptime(data['join_date'], '%Y-%m-%d').date()
+        if data.get('salary') is not None:
+            staff.salary = float(data['salary'])
+        if data.get('status'):
+            staff.status = data['status']
+        if data.get('performance'):
+            staff.performance = data['performance']
+        if data.get('tasks') is not None:
+            staff.tasks = int(data['tasks'])
+        if data.get('notes') is not None:
+            staff.notes = data['notes'].strip()
+        
+        staff.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify(staff.to_dict()), 200
+        
+    except IntegrityError as e:
+        db.session.rollback()
+        if 'uq_staff_shop_email' in str(e):
+            return jsonify({
+                'error': 'This email is already registered in this shop. Please use a different email.'
+            }), 400
+        return jsonify({'error': 'Database error occurred'}), 500
+        
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': f'Invalid data format: {str(e)}'}), 400
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@staff_bp.route('/<int:staff_id>', methods=['DELETE'])
+def delete_staff(staff_id):
+    """Delete/deactivate a staff member"""
+    try:
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({'error': 'Staff not found'}), 404
+        
+        staff.status = 'Inactive'
+        staff.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'Staff {staff.first_name} {staff.last_name} has been deactivated successfully'
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@staff_bp.route('/<int:staff_id>/role', methods=['PATCH'])
+def change_staff_role(staff_id):
+    """Change staff member's role"""
+    try:
+        data = request.get_json()
+        if not data.get('role'):
+            return jsonify({'error': 'Role is required'}), 400
+        
+        staff = Staff.query.get(staff_id)
+        if not staff:
+            return jsonify({'error': 'Staff not found'}), 404
+        
+        staff.role = data['role']
+        staff.updated_at = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify(staff.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@staff_bp.route('/stats', methods=['GET'])
+def get_staff_stats():
+    """Get staff statistics"""
+    try:
+        shop_id = request.args.get('shop_id')
+        if not shop_id:
+            return jsonify({'error': 'Shop ID is required'}), 400
+        
+        staff = Staff.query.filter_by(shop_id=shop_id).all()
+        
+        total = len(staff)
+        active = len([s for s in staff if s.status == 'Active'])
+        on_leave = len([s for s in staff if s.status == 'On Leave'])
+        inactive = len([s for s in staff if s.status == 'Inactive'])
+        
+        role_breakdown = {}
+        for s in staff:
+            role = s.role or 'Unknown'
+            role_breakdown[role] = role_breakdown.get(role, 0) + 1
+        
+        department_breakdown = {}
+        for s in staff:
+            dept = s.department or 'Unknown'
+            department_breakdown[dept] = department_breakdown.get(dept, 0) + 1
+        
+        salaries = [float(s.salary) for s in staff if s.salary]
+        total_salary = sum(salaries)
+        avg_salary = total_salary / len(salaries) if salaries else 0
+        
+        total_tasks = sum(s.tasks or 0 for s in staff)
+        
+        return jsonify({
+            'total': total,
+            'active': active,
+            'on_leave': on_leave,
+            'inactive': inactive,
+            'role_breakdown': role_breakdown,
+            'department_breakdown': department_breakdown,
+            'total_salary': total_salary,
+            'average_salary': avg_salary,
+            'total_tasks': total_tasks
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

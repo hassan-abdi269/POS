@@ -1,3 +1,5 @@
+// src/pages/UserGuide.jsx
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   BookOpen,
@@ -33,6 +35,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { userGuideService, authService } from '../service/api';
 
 const UserGuide = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -55,7 +58,16 @@ const UserGuide = () => {
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [userRole, setUserRole] = useState('shop_admin');
   const articleRef = useRef(null);
+
+  // Get user role
+  useEffect(() => {
+    const user = authService.getCurrentUser();
+    if (user) {
+      setUserRole(user.role || 'shop_admin');
+    }
+  }, []);
 
   // Sections data
   const sections = [
@@ -786,35 +798,22 @@ const UserGuide = () => {
     setIsTyping(true);
     
     try {
-      const response = await fetch('http://localhost:5000/api/userguide/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          message: message,
-          context: selectedArticle
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
-      }
-
-      const data = await response.json();
+      // Use the chat endpoint directly with the current article context
+      const response = await userGuideService.chat(message, selectedArticle);
       
       setIsTyping(false);
       
       setChatMessages(prev => [...prev, {
         id: Date.now(),
         type: 'bot',
-        message: data.response,
+        message: response.response || "I'm here to help! What would you like to know?",
         timestamp: new Date().toLocaleTimeString()
       }]);
     } catch (error) {
       console.error('Error sending message:', error);
       setIsTyping(false);
-      const fallbackResponse = getFallbackResponse(message);
+      // Fallback response
+      const fallbackResponse = "I'm here to help you with any questions about the Tirsi POS system. You can ask me about products, sales, customers, reports, staff management, settings, expenses, suppliers, returns, invoices, or loyalty programs. What would you like to know more about?";
       setChatMessages(prev => [...prev, {
         id: Date.now(),
         type: 'bot',
@@ -823,26 +822,6 @@ const UserGuide = () => {
       }]);
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const getFallbackResponse = (message) => {
-    const messageLower = message.toLowerCase();
-    
-    if (messageLower.includes('product') || messageLower.includes('inventory')) {
-      return 'To add a product, go to Inventory Management > Add Product. Fill in the product details including name, SKU, price, and stock quantity. Don\'t forget to set up categories for better organization!';
-    } else if (messageLower.includes('sale') || messageLower.includes('order')) {
-      return 'Creating an order is easy! Navigate to Sales Management > New Sale. Select a customer, add products to the cart, and process the payment. You can also handle returns and generate invoices from the same section.';
-    } else if (messageLower.includes('customer')) {
-      return 'Customer Management allows you to add new customers, manage profiles, and set up loyalty programs. You can track purchase history and contact information for better customer relationships.';
-    } else if (messageLower.includes('report') || messageLower.includes('analytics')) {
-      return 'The Finance & Analytics section provides comprehensive reports including profit & loss statements, sales analytics, and expense reports. You can filter by date range and export data for further analysis.';
-    } else if (messageLower.includes('staff') || messageLower.includes('employee')) {
-      return 'Staff Management lets you add team members, assign roles and permissions, and track attendance. Set up different access levels to ensure proper security and workflow management.';
-    } else if (messageLower.includes('setting') || messageLower.includes('configure')) {
-      return 'In Settings, you can configure your business information, set up security preferences, and manage notification settings. Customize the system to match your specific business needs.';
-    } else {
-      return 'I\'m here to help you with any questions about the Tirsi POS system. You can ask me about products, sales, customers, reports, staff management, settings, expenses, suppliers, returns, invoices, or loyalty programs. What would you like to know more about?';
     }
   };
 

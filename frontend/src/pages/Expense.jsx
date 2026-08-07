@@ -1,3 +1,4 @@
+// src/pages/Expense.jsx
 import React, { useState, useEffect } from 'react';
 import { 
   Search, 
@@ -21,8 +22,10 @@ import {
   X,
   Save,
   Package,
-  ShoppingBag
+  ShoppingBag,
+  AlertCircle
 } from 'lucide-react';
+import { expenseService, authService, reportService } from '../service/api';
 
 const Expense = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -61,25 +64,35 @@ const Expense = () => {
     notes: ''
   });
 
+  // Get current shop ID
+  const getShopId = () => {
+    const user = authService.getCurrentUser();
+    return user?.shopId;
+  };
+
   // Fetch expenses
   const fetchExpenses = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams();
-      if (searchTerm) params.append('search', searchTerm);
-      if (selectedStatus !== 'All') params.append('status', selectedStatus);
-      if (selectedPaymentMethod !== 'All') params.append('payment_method', selectedPaymentMethod);
+      setError('');
       
-      const response = await fetch(`http://localhost:5000/api/expenses?${params.toString()}`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setExpenseData(data);
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
+
+      // Build params for filtering
+      const params = {};
+      if (searchTerm) params.search = searchTerm;
+      if (selectedStatus !== 'All') params.status = selectedStatus;
+      if (selectedPaymentMethod !== 'All') params.payment_method = selectedPaymentMethod;
+
+      const data = await expenseService.getAllExpenses(shopId, params);
+      setExpenseData(data);
     } catch (error) {
       console.error('Error fetching expenses:', error);
-      setError('Failed to load expenses');
+      setError(error.response?.data?.error || 'Failed to load expenses');
     } finally {
       setLoading(false);
     }
@@ -88,13 +101,27 @@ const Expense = () => {
   // Fetch stats
   const fetchStats = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/expenses/stats', {
-        credentials: 'include'
+      const shopId = getShopId();
+      if (!shopId) return;
+
+      // Get all expenses to calculate stats
+      const expenses = await expenseService.getAllExpenses(shopId);
+      
+      const total = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+      const paid = expenses.filter(e => e.status === 'Paid' || e.status === 'paid').reduce((sum, e) => sum + (e.amount || 0), 0);
+      const pending = expenses.filter(e => e.status === 'Pending' || e.status === 'pending').reduce((sum, e) => sum + (e.amount || 0), 0);
+      const overdue = expenses.filter(e => e.status === 'Overdue' || e.status === 'overdue').reduce((sum, e) => sum + (e.amount || 0), 0);
+      const count = expenses.length;
+      const average = count > 0 ? total / count : 0;
+
+      setStats({
+        total,
+        paid,
+        pending,
+        overdue,
+        count,
+        average
       });
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-      }
     } catch (error) {
       console.error('Error fetching stats:', error);
     }
@@ -109,7 +136,6 @@ const Expense = () => {
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchExpenses();
-      fetchStats();
     }, 500);
     return () => clearTimeout(timer);
   }, [searchTerm, selectedStatus, selectedPaymentMethod]);
@@ -120,41 +146,26 @@ const Expense = () => {
       setLoading(true);
       setError('');
       
-      // Build query params for filters
-      const params = new URLSearchParams();
-      if (selectedStatus !== 'All') params.append('status', selectedStatus);
-      if (selectedPaymentMethod !== 'All') params.append('payment_method', selectedPaymentMethod);
-      if (searchTerm) params.append('search', searchTerm);
-      
-      const url = `http://localhost:5000/api/expenses/export/${format}?${params.toString()}`;
-      
-      const response = await fetch(url, {
-        credentials: 'include'
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Export failed');
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
-      
-      const blob = await response.blob();
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = `expenses_report_${new Date().toISOString().split('T')[0]}`;
-      
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-        if (match && match[1]) {
-          filename = match[1].replace(/['"]/g, '');
-        }
-      } else {
-        const ext = format === 'excel' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'docx';
-        filename += `.${ext}`;
-      }
+
+      // Build params for filtering
+      const params = {};
+      if (selectedStatus !== 'All') params.status = selectedStatus;
+      if (selectedPaymentMethod !== 'All') params.payment_method = selectedPaymentMethod;
+      if (searchTerm) params.search = searchTerm;
+
+      // Use report service to generate expense report
+      const blob = await reportService.generateExpenseReport(shopId, params);
       
       // Create download link
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = filename;
+      const extension = format === 'excel' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'docx';
+      link.download = `expenses_report_${new Date().toISOString().split('T')[0]}.${extension}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -165,7 +176,7 @@ const Expense = () => {
       setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Export error:', error);
-      setError(error.message || 'Failed to export expenses data');
+      setError(error.response?.data?.error || 'Failed to export expenses data');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);
@@ -178,32 +189,26 @@ const Expense = () => {
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch('http://localhost:5000/api/expenses', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess('Expense added successfully!');
-        setShowAddModal(false);
-        resetForm();
-        fetchExpenses();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to add expense');
-        setTimeout(() => setError(''), 5000);
-      }
+    try {
+      await expenseService.createExpense(shopId, {
+        ...formData,
+        amount: parseFloat(formData.amount)
+      });
+      setSuccess('Expense added successfully!');
+      setShowAddModal(false);
+      resetForm();
+      await fetchExpenses();
+      await fetchStats();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error adding expense:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to add expense');
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -214,32 +219,26 @@ const Expense = () => {
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch(`http://localhost:5000/api/expenses/${selectedExpense.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess('Expense updated successfully!');
-        setShowEditModal(false);
-        resetForm();
-        fetchExpenses();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to update expense');
-        setTimeout(() => setError(''), 5000);
-      }
+    try {
+      await expenseService.updateExpense(shopId, selectedExpense.id, {
+        ...formData,
+        amount: parseFloat(formData.amount)
+      });
+      setSuccess('Expense updated successfully!');
+      setShowEditModal(false);
+      resetForm();
+      await fetchExpenses();
+      await fetchStats();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error updating expense:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to update expense');
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -247,25 +246,21 @@ const Expense = () => {
   // Handle delete expense
   const handleDeleteExpense = async (expenseId) => {
     if (window.confirm('Are you sure you want to delete this expense?')) {
-      try {
-        const response = await fetch(`http://localhost:5000/api/expenses/${expenseId}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
 
-        if (response.ok) {
-          setSuccess('Expense deleted successfully!');
-          fetchExpenses();
-          fetchStats();
-          setTimeout(() => setSuccess(''), 5000);
-        } else {
-          const errorData = await response.json();
-          setError(errorData.error || 'Failed to delete expense');
-          setTimeout(() => setError(''), 5000);
-        }
+      try {
+        await expenseService.deleteExpense(shopId, expenseId);
+        setSuccess('Expense deleted successfully!');
+        await fetchExpenses();
+        await fetchStats();
+        setTimeout(() => setSuccess(''), 5000);
       } catch (error) {
         console.error('Error deleting expense:', error);
-        setError('Network error. Please check server connection.');
+        setError(error.response?.data?.error || 'Failed to delete expense');
         setTimeout(() => setError(''), 5000);
       }
     }
@@ -290,11 +285,11 @@ const Expense = () => {
     setSelectedExpense(expense);
     setFormData({
       item_name: expense.item_name,
-      amount: expense.amount.toString(),
-      date: expense.date,
-      payment_method: expense.payment_method,
+      amount: expense.amount?.toString() || '',
+      date: expense.date || new Date().toISOString().split('T')[0],
+      payment_method: expense.payment_method || 'Cash',
       reference: expense.reference || '',
-      status: expense.status,
+      status: expense.status || 'Pending',
       notes: expense.notes || ''
     });
     setShowEditModal(true);
@@ -340,7 +335,7 @@ const Expense = () => {
 
   // Get icon for item
   const getItemIcon = (itemName) => {
-    const name = itemName.toLowerCase();
+    const name = itemName?.toLowerCase() || '';
     if (name.includes('rent') || name.includes('lease')) return <Building2 className="w-5 h-5" />;
     if (name.includes('supply') || name.includes('material')) return <ShoppingBag className="w-5 h-5" />;
     if (name.includes('product') || name.includes('inventory')) return <Package className="w-5 h-5" />;
@@ -350,9 +345,10 @@ const Expense = () => {
   return (
     <div>
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-          {error}
-          <button onClick={() => setError('')} className="ml-2 text-red-500 hover:text-red-700">×</button>
+        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="ml-auto text-red-500 hover:text-red-700">×</button>
         </div>
       )}
       {success && (
@@ -551,6 +547,7 @@ const Expense = () => {
                   <td colSpan="7" className="text-center py-12 text-gray-500">
                     <Wallet className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                     <p className="text-lg font-medium">No expenses found</p>
+                    <p className="text-sm mt-1">Try adjusting your search or filters</p>
                   </td>
                 </tr>
               ) : (
@@ -572,7 +569,7 @@ const Expense = () => {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-gray-500">{expense.reference || '-'}</td>
-                    <td className="py-3 px-4 font-medium text-red-600">-KES {expense.amount.toFixed(2)}</td>
+                    <td className="py-3 px-4 font-medium text-red-600">-KES {expense.amount?.toFixed(2) || '0.00'}</td>
                     <td className="py-3 px-4">
                       <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border ${getStatusBgColor(expense.status)}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${getStatusDot(expense.status)}`}></span>
@@ -916,7 +913,7 @@ const Expense = () => {
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Amount</p>
-                  <p className="font-medium text-red-600">-KES {selectedExpense.amount.toFixed(2)}</p>
+                  <p className="font-medium text-red-600">-KES {selectedExpense.amount?.toFixed(2) || '0.00'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Date</p>

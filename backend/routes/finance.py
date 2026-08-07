@@ -1,4 +1,5 @@
 # routes/finance.py
+
 from flask import request, jsonify
 from flask_login import login_required, current_user
 from extensions import db
@@ -27,36 +28,19 @@ def init_finance_routes(app):
             if not shop_id:
                 return jsonify({'error': 'Shop not found'}), 401
             
-            # Get date range
-            period = request.args.get('period', 'month')
+            # Get date range from request
             start_date = request.args.get('start_date')
             end_date = request.args.get('end_date')
             
-            # Calculate date range
-            now = datetime.utcnow()
             if start_date and end_date:
                 start = datetime.strptime(start_date, '%Y-%m-%d')
                 end = datetime.strptime(end_date, '%Y-%m-%d')
                 end = end.replace(hour=23, minute=59, second=59)
             else:
-                if period == 'today':
-                    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                    end = now
-                elif period == 'week':
-                    start = now - timedelta(days=7)
-                    end = now
-                elif period == 'month':
-                    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                    end = now
-                elif period == 'quarter':
-                    start = now - timedelta(days=90)
-                    end = now
-                elif period == 'year':
-                    start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-                    end = now
-                else:
-                    start = now - timedelta(days=30)
-                    end = now
+                # Default to current month
+                now = datetime.utcnow()
+                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                end = now
             
             # Get sales data for this shop
             sales = Sale.query.filter(
@@ -72,8 +56,8 @@ def init_finance_routes(app):
             # Get expenses data for this shop
             expenses = Expense.query.filter(
                 Expense.shop_id == shop_id,
-                Expense.created_at >= start,
-                Expense.created_at <= end
+                Expense.date >= start.date(),
+                Expense.date <= end.date()
             ).all()
             
             total_expenses = sum(e.amount for e in expenses) if expenses else 0
@@ -89,8 +73,8 @@ def init_finance_routes(app):
             # Get product stats for this shop
             products = Product.query.filter_by(shop_id=shop_id).all()
             total_products = len(products)
-            low_stock_products = len([p for p in products if p.get_status() == 'Low Stock'])
-            out_of_stock_products = len([p for p in products if p.get_status() == 'Out of Stock'])
+            low_stock_products = len([p for p in products if hasattr(p, 'get_status') and p.get_status() == 'Low Stock'])
+            out_of_stock_products = len([p for p in products if hasattr(p, 'get_status') and p.get_status() == 'Out of Stock'])
             
             # Get customer stats for this shop
             customers = Customer.query.filter_by(shop_id=shop_id).all()
@@ -128,6 +112,104 @@ def init_finance_routes(app):
             
         except Exception as e:
             print(f"Error fetching finance overview: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    # ============ REVENUE REPORT ============
+    
+    @app.route('/api/finance/revenue', methods=['GET'])
+    @login_required
+    def get_revenue_report():
+        """Get revenue report for the current shop only"""
+        try:
+            shop_id = get_current_shop_id()
+            if not shop_id:
+                return jsonify({'error': 'Shop not found'}), 401
+            
+            # Get date range from request
+            start_date = request.args.get('start_date')
+            end_date = request.args.get('end_date')
+            limit = request.args.get('limit', 50, type=int)
+            
+            # Build query
+            query = Sale.query.filter(
+                Sale.shop_id == shop_id,
+                Sale.status != 'Cancelled'
+            )
+            
+            if start_date and end_date:
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+                end = datetime.strptime(end_date, '%Y-%m-%d')
+                end = end.replace(hour=23, minute=59, second=59)
+                query = query.filter(Sale.created_at >= start, Sale.created_at <= end)
+            
+            # Order by date and limit
+            sales = query.order_by(Sale.created_at.desc()).limit(limit).all()
+            
+            # Format response
+            result = []
+            for sale in sales:
+                result.append({
+                    'id': sale.id,
+                    'date': sale.created_at.isoformat() if sale.created_at else None,
+                    'total': float(sale.total) if sale.total else 0,
+                    'status': sale.status,
+                    'customer_name': sale.customer_name,
+                    'sale_number': sale.sale_number if hasattr(sale, 'sale_number') else f"SALE-{sale.id}"
+                })
+            
+            return jsonify(result)
+            
+        except Exception as e:
+            print(f"Error fetching revenue report: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    # ============ EXPENSE REPORT ============
+    
+    @app.route('/api/finance/expenses', methods=['GET'])
+    @login_required
+    def get_expense_report():
+        """Get expense report for the current shop only"""
+        try:
+            shop_id = get_current_shop_id()
+            if not shop_id:
+                return jsonify({'error': 'Shop not found'}), 401
+            
+            # Get date range from request
+            start_date = request.args.get('start_date')
+            end_date = request.args.get('end_date')
+            limit = request.args.get('limit', 50, type=int)
+            
+            # Build query
+            query = Expense.query.filter(Expense.shop_id == shop_id)
+            
+            if start_date and end_date:
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+                end = datetime.strptime(end_date, '%Y-%m-%d')
+                query = query.filter(
+                    Expense.date >= start.date(),
+                    Expense.date <= end.date()
+                )
+            
+            # Order by date and limit
+            expenses = query.order_by(Expense.date.desc()).limit(limit).all()
+            
+            # Format response
+            result = []
+            for expense in expenses:
+                result.append({
+                    'id': expense.id,
+                    'date': expense.date.isoformat() if expense.date else None,
+                    'amount': float(expense.amount) if expense.amount else 0,
+                    'item_name': expense.item_name,
+                    'category': expense.payment_method if hasattr(expense, 'payment_method') else 'General',
+                    'status': expense.status,
+                    'reference': expense.reference if hasattr(expense, 'reference') else ''
+                })
+            
+            return jsonify(result)
+            
+        except Exception as e:
+            print(f"Error fetching expense report: {e}")
             return jsonify({'error': str(e)}), 500
     
     # ============ REVENUE CHART DATA ============
@@ -310,7 +392,7 @@ def init_finance_routes(app):
             # Get expenses for this shop
             expenses = Expense.query.filter(
                 Expense.shop_id == shop_id
-            ).order_by(Expense.created_at.desc()).limit(limit).all()
+            ).order_by(Expense.date.desc()).limit(limit).all()
             
             # Combine and sort
             transactions = []
@@ -318,10 +400,10 @@ def init_finance_routes(app):
             for sale in sales:
                 transactions.append({
                     'id': sale.id,
-                    'description': f"Sale #{sale.sale_number} - {sale.customer_name}",
+                    'description': f"Sale #{sale.sale_number if hasattr(sale, 'sale_number') else sale.id} - {sale.customer_name}",
                     'type': 'Revenue',
-                    'amount': sale.total,
-                    'date': sale.created_at.isoformat(),
+                    'amount': float(sale.total) if sale.total else 0,
+                    'date': sale.created_at.isoformat() if sale.created_at else None,
                     'category': 'Sales',
                     'status': sale.status,
                     'source': 'sale'
@@ -332,15 +414,15 @@ def init_finance_routes(app):
                     'id': expense.id,
                     'description': expense.item_name,
                     'type': 'Expense',
-                    'amount': -expense.amount,
-                    'date': expense.date.isoformat(),
-                    'category': expense.payment_method,
+                    'amount': -float(expense.amount) if expense.amount else 0,
+                    'date': expense.date.isoformat() if expense.date else None,
+                    'category': expense.payment_method if hasattr(expense, 'payment_method') else 'General',
                     'status': expense.status,
                     'source': 'expense'
                 })
             
             # Sort by date descending
-            transactions.sort(key=lambda x: x['date'], reverse=True)
+            transactions.sort(key=lambda x: x['date'] if x['date'] else '', reverse=True)
             
             # Limit results
             transactions = transactions[:limit]
@@ -383,14 +465,14 @@ def init_finance_routes(app):
             # Today's expenses
             today_expenses = Expense.query.filter(
                 Expense.shop_id == shop_id,
-                Expense.created_at >= today
+                Expense.date == today.date()
             ).all()
             today_expense_total = sum(e.amount for e in today_expenses) if today_expenses else 0
             
             # This month's expenses
             month_expenses = Expense.query.filter(
                 Expense.shop_id == shop_id,
-                Expense.created_at >= month_start
+                Expense.date >= month_start.date()
             ).all()
             month_expense_total = sum(e.amount for e in month_expenses) if month_expenses else 0
             
@@ -409,4 +491,62 @@ def init_finance_routes(app):
             
         except Exception as e:
             print(f"Error fetching finance summary: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    # ============ PROFIT/LOSS ============
+    
+    @app.route('/api/finance/profit-loss', methods=['GET'])
+    @login_required
+    def get_profit_loss():
+        """Get profit/loss report for the current shop only"""
+        try:
+            shop_id = get_current_shop_id()
+            if not shop_id:
+                return jsonify({'error': 'Shop not found'}), 401
+            
+            # Get date range
+            start_date = request.args.get('start_date')
+            end_date = request.args.get('end_date')
+            
+            if start_date and end_date:
+                start = datetime.strptime(start_date, '%Y-%m-%d')
+                end = datetime.strptime(end_date, '%Y-%m-%d')
+                end = end.replace(hour=23, minute=59, second=59)
+            else:
+                now = datetime.utcnow()
+                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                end = now
+            
+            # Get sales
+            sales = Sale.query.filter(
+                Sale.shop_id == shop_id,
+                Sale.created_at >= start,
+                Sale.created_at <= end,
+                Sale.status != 'Cancelled'
+            ).all()
+            total_revenue = sum(s.total for s in sales) if sales else 0
+            
+            # Get expenses
+            expenses = Expense.query.filter(
+                Expense.shop_id == shop_id,
+                Expense.date >= start.date(),
+                Expense.date <= end.date()
+            ).all()
+            total_expenses = sum(e.amount for e in expenses) if expenses else 0
+            
+            net_profit = total_revenue - total_expenses
+            
+            return jsonify({
+                'total_revenue': float(total_revenue),
+                'total_expenses': float(total_expenses),
+                'net_profit': float(net_profit),
+                'profit_margin': float((net_profit / total_revenue) * 100) if total_revenue > 0 else 0,
+                'period': {
+                    'start': start.isoformat(),
+                    'end': end.isoformat()
+                }
+            })
+            
+        except Exception as e:
+            print(f"Error fetching profit/loss: {e}")
             return jsonify({'error': str(e)}), 500

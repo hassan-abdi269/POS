@@ -11,25 +11,13 @@ import {
   Clock,
   CreditCard,
   Banknote,
-  TrendingUp,
-  TrendingDown,
   Plus,
-  Calendar,
-  User,
-  Store,
   RefreshCw,
   AlertCircle,
-  Mail,
-  Phone,
-  ChevronLeft,
-  ChevronRight,
-  FileText,
-  Trash2,
-  Printer
+  Trash2
 } from 'lucide-react';
 import jsPDF from 'jspdf';
-
-const API_URL = 'http://localhost:5000/api';
+import { shopService, authService, paymentService } from '../../service/api';
 
 const Payments = () => {
   const [payments, setPayments] = useState([]);
@@ -50,44 +38,32 @@ const Payments = () => {
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [showAddPayment, setShowAddPayment] = useState(false);
   const [showEditPayment, setShowEditPayment] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
 
   useEffect(() => {
-    loadPayments();
-    loadShops();
-    loadStats();
+    // Check if user is super admin
+    if (!authService.isSuperAdmin()) {
+      setError('Access denied. Super admin privileges required.');
+      setIsLoading(false);
+      return;
+    }
+    loadData();
   }, []);
 
-  const loadPayments = async () => {
+  const loadData = async () => {
     setIsLoading(true);
-    setError('');
     try {
-      const params = new URLSearchParams();
-      if (searchTerm) params.append('search', searchTerm);
-      if (filterStatus !== 'all') params.append('status', filterStatus);
-      if (filterPlan !== 'all') params.append('plan', filterPlan);
-      if (filterShop) params.append('shop_id', filterShop);
-
-      const response = await fetch(`${API_URL}/payments?${params.toString()}`, {
-        credentials: 'include'
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to load payments');
-      }
-
-      const data = await response.json();
-      if (data.success) {
-        setPayments(data.payments);
-      } else {
-        setError(data.error || 'Failed to load payments');
-      }
+      await Promise.all([
+        loadShops(),
+        loadPayments(),
+        loadStats()
+      ]);
     } catch (err) {
-      console.error('Error loading payments:', err);
-      setError('Failed to connect to server');
+      console.error('Error loading data:', err);
+      setError('Failed to load data');
     } finally {
       setIsLoading(false);
     }
@@ -95,156 +71,197 @@ const Payments = () => {
 
   const loadShops = async () => {
     try {
-      const response = await fetch(`${API_URL}/shops`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setShops(data.shops);
-        }
-      }
+      const response = await shopService.getAllShops();
+      const shopsData = response?.shops || response || [];
+      setShops(shopsData);
     } catch (err) {
       console.error('Error loading shops:', err);
     }
   };
 
-  const loadStats = async () => {
+  // Fetch real payments from API
+  const loadPayments = async () => {
     try {
-      const params = new URLSearchParams();
-      if (filterShop) params.append('shop_id', filterShop);
+      const params = {};
+      if (searchTerm) params.search = searchTerm;
+      if (filterStatus !== 'all') params.status = filterStatus;
+      if (filterPlan !== 'all') params.plan = filterPlan;
+      if (filterShop) params.shop_id = filterShop;
 
-      const response = await fetch(`${API_URL}/payments/stats?${params.toString()}`, {
-        credentials: 'include'
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to load stats');
-      }
-
-      const data = await response.json();
-      if (data.success) {
-        setStats(data.stats);
-      }
+      const response = await paymentService.getAllPayments(params);
+      const paymentsData = response?.payments || response || [];
+      setPayments(paymentsData);
     } catch (err) {
-      console.error('Error loading stats:', err);
+      console.error('Error loading payments:', err);
+      setError('Failed to load payments');
     }
   };
 
+  // Fetch real payment stats
+  const loadStats = async () => {
+    try {
+      const params = {};
+      if (filterShop) params.shop_id = filterShop;
+
+      const response = await paymentService.getPaymentStats(params);
+      const statsData = response?.stats || {};
+      
+      setStats({
+        totalRevenue: statsData.totalRevenue || 0,
+        pendingPayments: statsData.pendingPayments || 0,
+        completedPayments: statsData.completedPayments || 0,
+        failedPayments: statsData.failedPayments || 0,
+        refundedPayments: statsData.refundedPayments || 0,
+        totalPayments: statsData.totalPayments || 0,
+        recentRevenue: statsData.recentRevenue || 0
+      });
+    } catch (err) {
+      console.error('Error loading stats:', err);
+      // Fallback: calculate from payments
+      if (payments.length > 0) {
+        calculateStatsFromPayments(payments);
+      }
+    }
+  };
+
+  // Fallback calculation from payments
+  const calculateStatsFromPayments = (paymentData) => {
+    const totalRevenue = paymentData.reduce((sum, p) => sum + (p.amount || 0), 0);
+    const pendingPayments = paymentData.filter(p => p.status === 'pending').length;
+    const completedPayments = paymentData.filter(p => p.status === 'completed').length;
+    const failedPayments = paymentData.filter(p => p.status === 'failed').length;
+    const refundedPayments = paymentData.filter(p => p.status === 'refunded').length;
+    const totalPayments = paymentData.length;
+    
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentRevenue = paymentData
+      .filter(p => p.payment_date && new Date(p.payment_date) >= thirtyDaysAgo)
+      .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    setStats({
+      totalRevenue,
+      pendingPayments,
+      completedPayments,
+      failedPayments,
+      refundedPayments,
+      totalPayments,
+      recentRevenue
+    });
+  };
+
+  // Create payment via API
   const handleAddPayment = async (newPayment) => {
     try {
-      const response = await fetch(`${API_URL}/payments`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(newPayment)
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        await loadPayments();
-        await loadStats();
+      const response = await paymentService.createPayment(newPayment);
+      if (response.success) {
+        await loadData();
         setShowAddPayment(false);
         alert('Payment added successfully!');
       } else {
-        throw new Error(data.error || 'Failed to add payment');
+        alert(response.error || 'Failed to add payment');
       }
     } catch (err) {
       console.error('Error adding payment:', err);
-      alert('Failed to add payment: ' + err.message);
+      alert('Failed to add payment: ' + (err.response?.data?.error || err.message));
     }
   };
 
+  // Update payment via API
   const handleEditPayment = async (paymentId, updatedData) => {
     try {
-      const response = await fetch(`${API_URL}/payments/${paymentId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(updatedData)
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        await loadPayments();
-        await loadStats();
+      const response = await paymentService.updatePayment(paymentId, updatedData);
+      if (response.success) {
+        await loadData();
         setShowEditPayment(null);
         alert('Payment updated successfully!');
       } else {
-        throw new Error(data.error || 'Failed to update payment');
+        alert(response.error || 'Failed to update payment');
       }
     } catch (err) {
       console.error('Error updating payment:', err);
-      alert('Failed to update payment: ' + err.message);
+      alert('Failed to update payment: ' + (err.response?.data?.error || err.message));
     }
   };
 
+  // Update payment status via API
   const handleUpdateStatus = async (paymentId, newStatus) => {
     try {
-      const response = await fetch(`${API_URL}/payments/${paymentId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ status: newStatus })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        await loadPayments();
-        await loadStats();
+      const response = await paymentService.updatePaymentStatus(paymentId, newStatus);
+      if (response.success) {
+        await loadData();
         alert(`Payment ${newStatus} successfully!`);
       } else {
-        throw new Error(data.error || 'Failed to update status');
+        alert(response.error || 'Failed to update status');
       }
     } catch (err) {
       console.error('Error updating status:', err);
-      alert('Failed to update payment status: ' + err.message);
+      alert('Failed to update payment status: ' + (err.response?.data?.error || err.message));
     }
   };
 
+  // Delete payment via API
   const handleDeletePayment = async (paymentId) => {
     if (!window.confirm('Are you sure you want to delete this payment?')) return;
 
     try {
-      const response = await fetch(`${API_URL}/payments/${paymentId}`, {
-        method: 'DELETE',
-        credentials: 'include'
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        await loadPayments();
-        await loadStats();
+      const response = await paymentService.deletePayment(paymentId);
+      if (response.success) {
+        await loadData();
         alert('Payment deleted successfully!');
       } else {
-        throw new Error(data.error || 'Failed to delete payment');
+        alert(response.error || 'Failed to delete payment');
       }
     } catch (err) {
       console.error('Error deleting payment:', err);
-      alert('Failed to delete payment: ' + err.message);
+      alert('Failed to delete payment: ' + (err.response?.data?.error || err.message));
     }
   };
 
-  // Load payments when filters change
+  // Reload payments when filters change
   useEffect(() => {
-    loadPayments();
+    if (authService.isSuperAdmin() && !isLoading) {
+      loadPayments();
+      loadStats();
+    }
   }, [searchTerm, filterStatus, filterPlan, filterShop]);
 
-  useEffect(() => {
-    loadStats();
-  }, [filterShop]);
+  // Filter payments (client-side filtering of API results)
+  const getFilteredPayments = () => {
+    let filtered = [...payments];
+    
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(p => 
+        p.transaction_id?.toLowerCase().includes(term) ||
+        p.customer_name?.toLowerCase().includes(term) ||
+        p.shop_name?.toLowerCase().includes(term) ||
+        p.receipt_number?.toLowerCase().includes(term)
+      );
+    }
+    
+    if (filterStatus !== 'all') {
+      filtered = filtered.filter(p => p.status === filterStatus);
+    }
+    
+    if (filterPlan !== 'all') {
+      filtered = filtered.filter(p => p.plan === filterPlan);
+    }
+    
+    if (filterShop) {
+      filtered = filtered.filter(p => p.shop_id === parseInt(filterShop));
+    }
+    
+    return filtered;
+  };
+
+  const filteredPayments = getFilteredPayments();
 
   // Pagination
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = payments.slice(indexOfFirstItem, indexOfLastItem);
-  const totalPages = Math.ceil(payments.length / itemsPerPage);
+  const currentItems = filteredPayments.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(filteredPayments.length / itemsPerPage);
 
   // Export single payment as PDF
   const exportSinglePaymentPDF = (payment) => {
@@ -402,7 +419,7 @@ const Payments = () => {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => { loadPayments(); loadStats(); }}
+            onClick={loadData}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
           >
             <RefreshCw className="h-4 w-4" />
@@ -530,7 +547,7 @@ const Payments = () => {
             ))}
           </select>
           <span className="text-sm text-gray-500 self-center">
-            {payments.length} payments
+            {filteredPayments.length} payments
           </span>
         </div>
       </div>
@@ -576,13 +593,13 @@ const Payments = () => {
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          payment.plan === 'Premium' 
+                          payment.plan === 'Premium'
                             ? 'bg-purple-100 text-purple-800' 
                             : payment.plan === 'Standard'
                             ? 'bg-blue-100 text-blue-800'
                             : 'bg-gray-100 text-gray-800'
                         }`}>
-                          {payment.plan}
+                          {payment.plan || 'Basic'}
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -673,7 +690,7 @@ const Payments = () => {
             </div>
 
             {/* Empty State */}
-            {payments.length === 0 && (
+            {filteredPayments.length === 0 && (
               <div className="text-center py-12">
                 <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
                   <DollarSign className="h-6 w-6 text-gray-400" />
@@ -694,10 +711,10 @@ const Payments = () => {
             )}
 
             {/* Pagination */}
-            {payments.length > 0 && (
+            {filteredPayments.length > 0 && (
               <div className="px-4 py-3 border-t border-gray-200 bg-gray-50 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <div className="text-sm text-gray-500">
-                  Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, payments.length)} of {payments.length}
+                  Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredPayments.length)} of {filteredPayments.length}
                 </div>
                 <div className="flex items-center gap-1">
                   <button
@@ -724,7 +741,7 @@ const Payments = () => {
         )}
       </div>
 
-      {/* Modals */}
+      {/* Add Payment Modal */}
       {showAddPayment && (
         <AddPaymentModal 
           shops={shops}
@@ -733,6 +750,7 @@ const Payments = () => {
         />
       )}
 
+      {/* Edit Payment Modal */}
       {showEditPayment && (
         <EditPaymentModal 
           payment={showEditPayment}
@@ -742,6 +760,7 @@ const Payments = () => {
         />
       )}
 
+      {/* Payment Details Modal */}
       {selectedPayment && (
         <PaymentDetailsModal 
           payment={selectedPayment} 
@@ -759,14 +778,16 @@ const Payments = () => {
   );
 };
 
-// Add Payment Modal Component
+// ============================================================
+// ADD PAYMENT MODAL - FIXED with Capitalized Plans
+// ============================================================
 const AddPaymentModal = ({ shops, onClose, onSuccess }) => {
   const [formData, setFormData] = useState({
     shop_id: '',
     amount: '',
     plan: 'Basic',
     payment_method: 'credit_card',
-    status: 'completed',
+    status: 'pending',
     customer_name: '',
     customer_email: '',
     customer_phone: '',
@@ -1048,13 +1069,15 @@ const AddPaymentModal = ({ shops, onClose, onSuccess }) => {
   );
 };
 
-// Edit Payment Modal Component
+// ============================================================
+// EDIT PAYMENT MODAL - FIXED with Capitalized Plans
+// ============================================================
 const EditPaymentModal = ({ payment, onClose, onSuccess }) => {
   const [formData, setFormData] = useState({
     amount: payment.amount || '',
     plan: payment.plan || 'Basic',
     payment_method: payment.payment_method || 'credit_card',
-    status: payment.status || 'completed',
+    status: payment.status || 'pending',
     customer_name: payment.customer_name || '',
     customer_email: payment.customer_email || '',
     customer_phone: payment.customer_phone || '',
@@ -1279,7 +1302,9 @@ const EditPaymentModal = ({ payment, onClose, onSuccess }) => {
   );
 };
 
-// Payment Details Modal
+// ============================================================
+// PAYMENT DETAILS MODAL
+// ============================================================
 const PaymentDetailsModal = ({ payment, onClose, onUpdateStatus, onDelete, onExportPDF, onEdit }) => {
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('en-KE', {
@@ -1339,7 +1364,7 @@ const PaymentDetailsModal = ({ payment, onClose, onUpdateStatus, onDelete, onExp
           </div>
           <div className="p-3 bg-gray-50 rounded-lg">
             <p className="text-xs text-gray-500">Plan</p>
-            <p className="font-medium text-sm">{payment.plan}</p>
+            <p className="font-medium text-sm">{payment.plan || 'Basic'}</p>
           </div>
           <div className="p-3 bg-gray-50 rounded-lg">
             <p className="text-xs text-gray-500">Method</p>

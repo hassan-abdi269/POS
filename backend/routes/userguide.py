@@ -1,10 +1,12 @@
+# routes/userguide.py
+
 from flask import Blueprint, request, jsonify, current_app
 from extensions import db
 from datetime import datetime
 import re
 import json
 
-# Create blueprint
+# Create blueprint - note the URL prefix is '/api/userguide'
 userguide_bp = Blueprint('userguide', __name__, url_prefix='/api/userguide')
 
 # In-memory Q&A storage (you can replace with database if needed)
@@ -128,86 +130,6 @@ qa_pairs = [
         "category": "settings",
         "keywords": "tax rate configure",
         "times_asked": 0
-    },
-    {
-        "id": 16,
-        "question": "How to handle multiple currencies?",
-        "answer": "In Settings > Currency Configuration, you can add multiple currencies, set exchange rates, and configure which currencies are accepted for payments.",
-        "category": "settings",
-        "keywords": "currency exchange multi",
-        "times_asked": 0
-    },
-    {
-        "id": 17,
-        "question": "How to backup data?",
-        "answer": "Navigate to Settings > Backup & Restore. You can create manual backups, schedule automatic backups, and restore data from previous backups.",
-        "category": "settings",
-        "keywords": "backup restore data",
-        "times_asked": 0
-    },
-    {
-        "id": 18,
-        "question": "How to manage user permissions?",
-        "answer": "Go to Staff Management > Roles & Permissions. You can create custom roles, assign specific permissions, and control access to different modules.",
-        "category": "staff",
-        "keywords": "permissions role access control",
-        "times_asked": 0
-    },
-    {
-        "id": 19,
-        "question": "How to create discount codes?",
-        "answer": "In Sales Management > Discounts & Promotions, you can create discount codes, set percentage or fixed amount discounts, and define validity periods.",
-        "category": "sales",
-        "keywords": "discount promo code",
-        "times_asked": 0
-    },
-    {
-        "id": 20,
-        "question": "How to print receipts?",
-        "answer": "After completing a sale, click 'Print Receipt'. You can customize receipt templates, add store information, and choose between thermal or A4 receipt formats.",
-        "category": "sales",
-        "keywords": "receipt print thermal",
-        "times_asked": 0
-    },
-    {
-        "id": 21,
-        "question": "How to add categories?",
-        "answer": "In Inventory Management > Categories, you can create product categories, assign parent categories, and organize your products for better management and reporting.",
-        "category": "inventory",
-        "keywords": "category organize product",
-        "times_asked": 0
-    },
-    {
-        "id": 22,
-        "question": "How to handle customer returns?",
-        "answer": "Go to Sales Management, find the original sale, and click 'Process Return'. You can issue refunds to the original payment method or provide store credit.",
-        "category": "sales",
-        "keywords": "return refund customer credit",
-        "times_asked": 0
-    },
-    {
-        "id": 23,
-        "question": "How to track expenses by category?",
-        "answer": "In Expense Tracking, you can filter expenses by category, view spending trends, and generate category-wise expense reports for better financial management.",
-        "category": "expense",
-        "keywords": "expense category track spending",
-        "times_asked": 0
-    },
-    {
-        "id": 24,
-        "question": "How to add product variants?",
-        "answer": "When adding a product, enable 'Has Variants' and add options like size, color, or material. Each variant can have its own SKU, price, and stock level.",
-        "category": "inventory",
-        "keywords": "variant size color option sku",
-        "times_asked": 0
-    },
-    {
-        "id": 25,
-        "question": "How to export reports?",
-        "answer": "In any report view, click the 'Export' button. You can export data as PDF, Excel, or CSV format for further analysis or sharing with stakeholders.",
-        "category": "finance",
-        "keywords": "export report pdf excel csv",
-        "times_asked": 0
     }
 ]
 
@@ -241,81 +163,6 @@ article_content = {
             'Keep your business license and tax information handy',
             'Create a backup of your initial configuration',
             'Test the system with sample transactions before going live'
-        ]
-    },
-    'navigation': {
-        'title': 'Navigating the Dashboard',
-        'content': [
-            'The dashboard is designed for intuitive navigation and quick access to all features.',
-            'The main sidebar contains all modules grouped by function. Click on any module to expand and view its sub-sections.',
-            'The top bar displays key metrics, notifications, and quick action buttons.',
-            'Use the search bar to quickly find specific features or articles.'
-        ],
-        'tips': [
-            'Pin frequently used modules for quick access',
-            'Use keyboard shortcuts for common actions',
-            'Customize your dashboard view based on your role'
-        ]
-    },
-    'overview': {
-        'title': 'Dashboard Overview',
-        'content': [
-            'The Dashboard is your central hub for monitoring your business performance in real-time.',
-            'At the top, you\'ll see key metrics including total sales, customer contacts, and recent purchase history.',
-            'The dashboard provides quick access to your most important business data, allowing you to make informed decisions.',
-            'Interactive charts and graphs help visualize trends and patterns in your business data.'
-        ],
-        'tips': [
-            'Monitor your sales trends daily to identify patterns',
-            'Keep an eye on customer activity for retention opportunities',
-            'Check recent transactions regularly for discrepancies',
-            'Use the data to identify business growth opportunities'
-        ]
-    },
-    'add-product': {
-        'title': 'Adding Products',
-        'content': [
-            'The Inventory module allows you to manage your product catalog efficiently and effectively.',
-            'To add a new product, navigate to Inventory and click the "Add Product" button.',
-            'Fill in the product details including name, SKU, category, price, and initial stock quantity.',
-            'You can also add product images and set up variants for products with multiple options like size or color.',
-            'Set minimum stock levels to receive automated alerts when inventory is low.'
-        ],
-        'tips': [
-            'Use descriptive names and SKUs for easy searching',
-            'Set appropriate stock levels based on sales velocity',
-            'Categorize products for better organization and reporting',
-            'Regularly update product information and pricing'
-        ]
-    },
-    'create-order': {
-        'title': 'Creating Orders',
-        'content': [
-            'The Sales module enables you to process customer orders quickly and efficiently.',
-            'To create a new order, navigate to Sales and click the "New Sale" button.',
-            'Select the customer from the dropdown or create a new customer profile.',
-            'Add products to the cart by searching or scanning barcodes.',
-            'Process the payment using your preferred payment method (cash, card, mobile money, etc.).'
-        ],
-        'tips': [
-            'Verify customer information before processing',
-            'Double-check product quantities and prices',
-            'Offer multiple payment options to customers',
-            'Print or email receipts to customers for their records'
-        ]
-    },
-    'manage-stock': {
-        'title': 'Managing Stock',
-        'content': [
-            'Effective stock management is crucial for business operations.',
-            'The system tracks inventory levels in real-time and updates automatically with each sale.',
-            'You can perform stock counts to verify physical inventory against system records.',
-            'Receive alerts when stock levels fall below minimum thresholds.'
-        ],
-        'tips': [
-            'Perform regular stock audits to maintain accuracy',
-            'Set reorder points based on historical sales data',
-            'Track stock movements for better inventory control'
         ]
     }
 }
@@ -442,6 +289,21 @@ What would you like to know more about?"""
 def init_userguide_routes(app):
     """Initialize user guide routes"""
     app.register_blueprint(userguide_bp)
+
+@userguide_bp.route('', methods=['GET'])
+def get_userguide():
+    """Get the user guide content"""
+    try:
+        role = request.args.get('role', 'shop_admin')
+        return jsonify({
+            'role': role,
+            'articles': article_content,
+            'qa_pairs': qa_pairs,
+            'total_articles': len(article_content),
+            'total_qa_pairs': len(qa_pairs)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @userguide_bp.route('/chat', methods=['POST'])
 def chat():

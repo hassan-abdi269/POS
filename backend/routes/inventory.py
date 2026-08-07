@@ -1,4 +1,4 @@
-# routes/inventory.py (Updated with shop filtering)
+# routes/inventory.py (Complete Fixed Version)
 import os
 import uuid
 import traceback
@@ -22,7 +22,6 @@ def allowed_file(filename):
 def get_current_shop_id():
     """Get the current shop ID from the logged-in user"""
     if hasattr(current_user, 'id'):
-        # If current_user is a Shop object directly
         return current_user.id
     return None
 
@@ -133,7 +132,7 @@ def init_inventory_routes(app):
     # ============ PRODUCT ROUTES ============
     
     @app.route('/api/products', methods=['GET'])
-    @login_required  # ADD THIS - Require login
+    @login_required
     def get_products():
         """Get all products for the current shop only"""
         try:
@@ -200,13 +199,26 @@ def init_inventory_routes(app):
             if not shop_id:
                 return jsonify({'error': 'Shop not found'}), 401
             
-            data = request.get_json()
+            # ✅ FIXED: Get JSON data with error handling
+            try:
+                data = request.get_json()
+            except Exception as e:
+                return jsonify({'error': f'Invalid JSON: {str(e)}'}), 400
             
+            # ✅ FIXED: Check if data is a dictionary
             if not data:
                 return jsonify({'error': 'No data provided'}), 400
             
+            if not isinstance(data, dict):
+                return jsonify({'error': 'Data must be a JSON object'}), 400
+            
+            # ✅ FIXED: Handle required fields with proper checking
             required = ['name', 'sku', 'price', 'stock', 'stock_limit']
-            missing = [f for f in required if f not in data]
+            missing = []
+            for field in required:
+                if field not in data:
+                    missing.append(field)
+            
             if missing:
                 return jsonify({
                     'error': f'Missing required fields: {", ".join(missing)}'
@@ -244,7 +256,7 @@ def init_inventory_routes(app):
                     return jsonify({'error': 'Supplier not found'}), 404
             
             product = Product(
-                shop_id=shop_id,  # ADD THIS - Set shop_id
+                shop_id=shop_id,
                 name=data['name'],
                 sku=data['sku'],
                 description=data.get('description', ''),
@@ -287,7 +299,14 @@ def init_inventory_routes(app):
             if not product:
                 return jsonify({'error': 'Product not found'}), 404
             
-            data = request.get_json()
+            try:
+                data = request.get_json()
+            except Exception as e:
+                return jsonify({'error': f'Invalid JSON: {str(e)}'}), 400
+            
+            if not data or not isinstance(data, dict):
+                return jsonify({'error': 'Invalid data format'}), 400
+            
             old_supplier_id = product.supplier_id
             
             if 'name' in data:

@@ -1,3 +1,4 @@
+// src/pages/Sales.jsx
 import React, { useState, useEffect } from 'react';
 import { 
   Search, 
@@ -31,6 +32,7 @@ import {
   Phone,
   List
 } from 'lucide-react';
+import { salesService, inventoryService, customerService, reportService, authService } from '../service/api';
 import { saveAs } from 'file-saver';
 
 const Sales = () => {
@@ -50,7 +52,7 @@ const Sales = () => {
   const [showCancelled, setShowCancelled] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   
-  // Sale form state - Removed tax
+  // Sale form state
   const [saleForm, setSaleForm] = useState({
     customer_id: '',
     customer_name: '',
@@ -69,37 +71,39 @@ const Sales = () => {
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [quantity, setQuantity] = useState(1);
 
+  // Get current shop ID
+  const getShopId = () => {
+    const user = authService.getCurrentUser();
+    return user?.shopId;
+  };
+
   // Fetch products from inventory
   const fetchProducts = async () => {
     try {
-      setLoading(true);
-      const response = await fetch('http://localhost:5000/api/products', {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const availableProducts = data.filter(p => p.stock > 0);
-        setInventoryData(availableProducts);
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
+
+      const data = await inventoryService.getAllProducts(shopId);
+      const availableProducts = data.filter(p => p.stock > 0);
+      setInventoryData(availableProducts);
     } catch (error) {
       console.error('Error fetching products:', error);
-      setError('Failed to load products.');
-    } finally {
-      setLoading(false);
+      setError(error.response?.data?.error || 'Failed to load products.');
     }
   };
 
   // Fetch customers
   const fetchCustomers = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/customers', {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const activeCustomers = data.filter(c => c.status === 'Active');
-        setCustomersData(activeCustomers);
-      }
+      const shopId = getShopId();
+      if (!shopId) return;
+
+      const data = await customerService.getAllCustomers(shopId);
+      const activeCustomers = data.filter(c => c.status === 'Active' || c.status === 'active');
+      setCustomersData(activeCustomers);
     } catch (error) {
       console.error('Error fetching customers:', error);
     }
@@ -108,25 +112,34 @@ const Sales = () => {
   // Fetch sales data
   const fetchSales = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/sales', {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setSalesData(data);
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
+
+      const data = await salesService.getAllSales(shopId);
+      setSalesData(data);
     } catch (error) {
       console.error('Error fetching sales:', error);
+      setError(error.response?.data?.error || 'Failed to load sales.');
     }
   };
 
   useEffect(() => {
-    fetchProducts();
-    fetchCustomers();
-    fetchSales();
+    const loadData = async () => {
+      setLoading(true);
+      await Promise.all([
+        fetchProducts(),
+        fetchCustomers(),
+        fetchSales()
+      ]);
+      setLoading(false);
+    };
+    loadData();
   }, []);
 
-  // Calculate totals when items change - Removed tax
+  // Calculate totals when items change
   useEffect(() => {
     const subtotal = saleForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const total = subtotal - saleForm.discount;
@@ -170,68 +183,60 @@ const Sales = () => {
       setLoading(true);
       setError('');
       
-      const params = new URLSearchParams();
-      if (selectedStatus !== 'All') params.append('status', selectedStatus);
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      // Build params for filtering
+      const params = {};
+      if (selectedStatus !== 'All') params.status = selectedStatus;
       
       if (selectedPeriod === 'Today') {
         const today = new Date().toISOString().split('T')[0];
-        params.append('start_date', today);
-        params.append('end_date', today);
+        params.start_date = today;
+        params.end_date = today;
       } else if (selectedPeriod === 'Yesterday') {
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
-        const dateStr = yesterday.toISOString().split('T')[0];
-        params.append('start_date', dateStr);
-        params.append('end_date', dateStr);
+        params.start_date = yesterday.toISOString().split('T')[0];
+        params.end_date = yesterday.toISOString().split('T')[0];
       } else if (selectedPeriod === 'This Week') {
         const now = new Date();
         const start = new Date(now);
         start.setDate(now.getDate() - now.getDay());
         const end = new Date(now);
         end.setDate(now.getDate() + (6 - now.getDay()));
-        params.append('start_date', start.toISOString().split('T')[0]);
-        params.append('end_date', end.toISOString().split('T')[0]);
+        params.start_date = start.toISOString().split('T')[0];
+        params.end_date = end.toISOString().split('T')[0];
       } else if (selectedPeriod === 'This Month') {
         const now = new Date();
         const start = new Date(now.getFullYear(), now.getMonth(), 1);
         const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        params.append('start_date', start.toISOString().split('T')[0]);
-        params.append('end_date', end.toISOString().split('T')[0]);
+        params.start_date = start.toISOString().split('T')[0];
+        params.end_date = end.toISOString().split('T')[0];
       }
       
-      const url = `http://localhost:5000/api/sales/export/${format}?${params.toString()}`;
+      // Use report service to generate sales report
+      const blob = await reportService.generateSalesReport(shopId, params);
       
-      const response = await fetch(url, {
-        credentials: 'include'
-      });
+      // Create download link
+      const link = document.createElement('a');
+      const extension = format === 'excel' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'docx';
+      link.download = `sales_report_${new Date().toISOString().split('T')[0]}.${extension}`;
+      link.href = URL.createObjectURL(blob);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Export failed');
-      }
-      
-      const blob = await response.blob();
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = `sales_report_${new Date().toISOString().split('T')[0]}`;
-      
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-        if (match && match[1]) {
-          filename = match[1].replace(/['"]/g, '');
-        }
-      } else {
-        const ext = format === 'excel' ? 'xlsx' : format === 'pdf' ? 'pdf' : 'docx';
-        filename += `.${ext}`;
-      }
-      
-      saveAs(blob, filename);
       setSuccess(`Sales report exported as ${format.toUpperCase()} successfully!`);
       setShowExportMenu(false);
-      
       setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Export error:', error);
-      setError(error.message || 'Failed to export sales data');
+      setError(error.response?.data?.error || 'Failed to export sales data');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);
@@ -313,11 +318,17 @@ const Sales = () => {
     }));
   };
 
-  // Submit sale - Removed tax
+  // Submit sale
   const handleSubmitSale = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
+    
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
     
     if (saleForm.items.length === 0) {
       setError('Please add at least one product to the sale');
@@ -335,31 +346,16 @@ const Sales = () => {
         }))
       };
 
-      const response = await fetch('http://localhost:5000/api/sales', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(saleData),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess(`Sale #${data.sale_number || data.id} created successfully!`);
-        setShowSaleModal(false);
-        resetForm();
-        fetchProducts();
-        fetchSales();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to create sale');
-        setTimeout(() => setError(''), 5000);
-      }
+      const result = await salesService.createSale(shopId, saleData);
+      setSuccess(`Sale #${result.sale_number || result.id} created successfully!`);
+      setShowSaleModal(false);
+      resetForm();
+      await fetchProducts();
+      await fetchSales();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error creating sale:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to create sale');
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -416,6 +412,12 @@ const Sales = () => {
     setError('');
     setSuccess('');
 
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
+
     try {
       const updateData = {
         status: saleForm.status,
@@ -426,28 +428,14 @@ const Sales = () => {
         payment_method: saleForm.payment_method
       };
 
-      const response = await fetch(`http://localhost:5000/api/sales/${selectedSale.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(updateData),
-      });
-
-      if (response.ok) {
-        setSuccess(`Sale #${selectedSale.sale_number || selectedSale.id} updated successfully!`);
-        setShowEditModal(false);
-        fetchSales();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to update sale');
-        setTimeout(() => setError(''), 5000);
-      }
+      await salesService.updateSale(shopId, selectedSale.id, updateData);
+      setSuccess(`Sale #${selectedSale.sale_number || selectedSale.id} updated successfully!`);
+      setShowEditModal(false);
+      await fetchSales();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error updating sale:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to update sale');
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -455,24 +443,20 @@ const Sales = () => {
   // Handle Delete/Cancel Sale
   const handleCancelSale = async (saleId) => {
     if (window.confirm('Are you sure you want to cancel this sale?')) {
-      try {
-        const response = await fetch(`http://localhost:5000/api/sales/${saleId}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
 
-        if (response.ok) {
-          setSuccess('Sale cancelled successfully!');
-          fetchSales();
-          setTimeout(() => setSuccess(''), 5000);
-        } else {
-          const errorData = await response.json();
-          setError(errorData.error || 'Failed to cancel sale');
-          setTimeout(() => setError(''), 5000);
-        }
+      try {
+        await salesService.deleteSale(shopId, saleId);
+        setSuccess('Sale cancelled successfully!');
+        await fetchSales();
+        setTimeout(() => setSuccess(''), 5000);
       } catch (error) {
         console.error('Error cancelling sale:', error);
-        setError('Network error. Please check server connection.');
+        setError(error.response?.data?.error || 'Failed to cancel sale');
         setTimeout(() => setError(''), 5000);
       }
     }
@@ -549,9 +533,10 @@ const Sales = () => {
   return (
     <div>
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-          {error}
-          <button onClick={() => setError('')} className="ml-2 text-red-500 hover:text-red-700">×</button>
+        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="ml-auto text-red-500 hover:text-red-700">×</button>
         </div>
       )}
       {success && (
@@ -761,96 +746,106 @@ const Sales = () => {
               </tr>
             </thead>
             <tbody>
-              {filteredData.map((order) => {
-                const uniqueItems = order.items?.length || 0;
-                const totalQuantity = order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
-                const itemNames = order.items?.map(item => item.product_name || item.name).join(', ') || 'No items';
-                
-                return (
-                  <tr key={order.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="py-3 px-4">
-                      <span className="font-medium text-gray-600 hover:text-gray-800 cursor-pointer">
-                        #{order.sale_number || order.id}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(order.customer_name || 'C')} flex items-center justify-center text-white font-semibold text-xs`}>
-                          {(order.customer_name || 'C').charAt(0).toUpperCase()}
+              {loading ? (
+                <tr>
+                  <td colSpan="10" className="text-center py-12">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
+                    <p className="mt-4 text-gray-500">Loading sales...</p>
+                  </td>
+                </tr>
+              ) : filteredData.length === 0 ? (
+                <tr>
+                  <td colSpan="10" className="text-center py-12 text-gray-500">
+                    <ShoppingCart className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                    <p className="text-lg font-medium">No orders found</p>
+                    <p className="text-sm">Try adjusting your search or filters</p>
+                  </td>
+                </tr>
+              ) : (
+                filteredData.map((order) => {
+                  const uniqueItems = order.items?.length || 0;
+                  const totalQuantity = order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
+                  const itemNames = order.items?.map(item => item.product_name || item.name).join(', ') || 'No items';
+                  
+                  return (
+                    <tr key={order.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                      <td className="py-3 px-4">
+                        <span className="font-medium text-gray-600 hover:text-gray-800 cursor-pointer">
+                          #{order.sale_number || order.id}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(order.customer_name || 'C')} flex items-center justify-center text-white font-semibold text-xs`}>
+                            {(order.customer_name || 'C').charAt(0).toUpperCase()}
+                          </div>
+                          <span className="text-gray-900 font-medium">{order.customer_name || 'Walk-in Customer'}</span>
                         </div>
-                        <span className="text-gray-900 font-medium">{order.customer_name || 'Walk-in Customer'}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-gray-600">{order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A'}</td>
-                    <td className="py-3 px-4">
-                      <div className="max-w-xs truncate" title={itemNames}>
-                        {itemNames}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="inline-flex items-center justify-center bg-blue-100 px-2 py-1 rounded-full text-xs font-medium text-blue-700">
-                        {uniqueItems}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="inline-flex items-center justify-center bg-gray-100 px-2 py-1 rounded-full text-xs font-medium text-gray-700">
-                        {totalQuantity}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                        {getPaymentIcon(order.payment_method)}
-                        {order.payment_method}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-semibold text-gray-900">KES {order.total?.toFixed(2) || '0.00'}</td>
-                    <td className="py-3 px-4">
-                      <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border ${getStatusBgColor(order.status)}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${getStatusDot(order.status)}`}></span>
-                        {order.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-2">
-                      <div className="flex items-center gap-0.5">
-                        <button 
-                          onClick={() => handleViewSale(order)}
-                          className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                          title="View"
-                        >
-                          <Eye className="w-4 h-4 text-gray-400 hover:text-gray-700" />
-                        </button>
-                        <button 
-                          onClick={() => handleEditSale(order)}
-                          className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                          title="Edit"
-                        >
-                          <Edit className="w-4 h-4 text-gray-400 hover:text-blue-600" />
-                        </button>
-                        <button 
-                          onClick={() => handleCancelSale(order.id)}
-                          className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
-                          title="Cancel"
-                        >
-                          <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                      <td className="py-3 px-4 text-gray-600">{order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A'}</td>
+                      <td className="py-3 px-4">
+                        <div className="max-w-xs truncate" title={itemNames}>
+                          {itemNames}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span className="inline-flex items-center justify-center bg-blue-100 px-2 py-1 rounded-full text-xs font-medium text-blue-700">
+                          {uniqueItems}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span className="inline-flex items-center justify-center bg-gray-100 px-2 py-1 rounded-full text-xs font-medium text-gray-700">
+                          {totalQuantity}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                          {getPaymentIcon(order.payment_method)}
+                          {order.payment_method}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-semibold text-gray-900">KES {order.total?.toFixed(2) || '0.00'}</td>
+                      <td className="py-3 px-4">
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border ${getStatusBgColor(order.status)}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${getStatusDot(order.status)}`}></span>
+                          {order.status}
+                        </span>
+                      </td>
+                      <td className="py-3 px-2">
+                        <div className="flex items-center gap-0.5">
+                          <button 
+                            onClick={() => handleViewSale(order)}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title="View"
+                          >
+                            <Eye className="w-4 h-4 text-gray-400 hover:text-gray-700" />
+                          </button>
+                          <button 
+                            onClick={() => handleEditSale(order)}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title="Edit"
+                          >
+                            <Edit className="w-4 h-4 text-gray-400 hover:text-blue-600" />
+                          </button>
+                          <button 
+                            onClick={() => handleCancelSale(order.id)}
+                            className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                            title="Cancel"
+                          >
+                            <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-600" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
-        {filteredData.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
-            <ShoppingCart className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-            <p className="text-lg font-medium">No orders found</p>
-            <p className="text-sm">Try adjusting your search or filters</p>
-          </div>
-        )}
       </div>
 
-      {/* New Sale Modal - Removed tax */}
+      {/* New Sale Modal */}
       {showSaleModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
@@ -955,7 +950,7 @@ const Sales = () => {
                     <option value="">Select a product...</option>
                     {inventoryData.map(product => (
                       <option key={product.id} value={product.id}>
-                        {product.name} (Stock: {product.stock} units - KES {product.price.toFixed(2)})
+                        {product.name} (Stock: {product.stock} units - KES {product.price?.toFixed(2)})
                       </option>
                     ))}
                   </select>
@@ -1042,7 +1037,7 @@ const Sales = () => {
                 )}
               </div>
 
-              {/* Order Summary - Removed tax */}
+              {/* Order Summary */}
               <div className="border-t border-gray-200 pt-4 mb-6">
                 <div className="space-y-2 max-w-sm ml-auto">
                   <div className="flex justify-between text-sm">
@@ -1101,7 +1096,7 @@ const Sales = () => {
         </div>
       )}
 
-      {/* View Sale Modal - Removed tax display */}
+      {/* View Sale Modal */}
       {showViewModal && selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">

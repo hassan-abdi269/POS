@@ -1,4 +1,5 @@
 # routes/supplier.py - COMPLETE WITH PROFESSIONAL INVOICE-STYLE PDF, SHOP NAME DISPLAY, FULL BIDIRECTIONAL STATUS CHANGES & EXCEL EXPORT
+
 from flask import request, jsonify, current_app
 from flask_login import login_required, current_user
 from extensions import db
@@ -411,7 +412,7 @@ def init_supplier_routes(app):
             items = []
             
             for item_data in data['items']:
-                # Check if product_id is provided or if we need to use manual entry
+                # Check if product_id is provided
                 if 'product_id' in item_data and item_data['product_id']:
                     # Try to find existing product
                     product = Product.query.filter_by(id=item_data['product_id'], shop_id=shop_id).first()
@@ -426,7 +427,9 @@ def init_supplier_routes(app):
                         'product': product,
                         'price': price,
                         'quantity': quantity,
-                        'total': item_total
+                        'total': item_total,
+                        'product_name': product.name,
+                        'product_sku': product.sku
                     })
                 else:
                     # Manual entry - use product_name directly
@@ -444,25 +447,22 @@ def init_supplier_routes(app):
                     quantity = item_data.get('quantity', 1)
                     item_total = price * quantity
                     
-                    if not product:
-                        # Create a new product in the database
-                        product = Product(
-                            shop_id=shop_id,
-                            name=product_name,
-                            sku=f"MANUAL-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{len(items)+1}",
-                            price=price,
-                            stock=0,  # Will be updated when order is received
-                            description=f"Added from purchase order",
-                            supplier_id=supplier.id
-                        )
-                        db.session.add(product)
-                        db.session.flush()  # Get the product ID
+                    # If product exists, use it
+                    if product:
+                        product_sku = product.sku
+                    else:
+                        # Generate a placeholder SKU for the order item
+                        # The product will be created when the order is marked as "Received"
+                        product_sku = f"PO-{datetime.utcnow().strftime('%Y%m%d')}-{len(items)+1}"
+                        product = None
                     
                     items.append({
                         'product': product,
                         'price': price,
                         'quantity': quantity,
-                        'total': item_total
+                        'total': item_total,
+                        'product_name': product_name,
+                        'product_sku': product_sku
                     })
                 
                 subtotal += items[-1]['total']
@@ -504,9 +504,9 @@ def init_supplier_routes(app):
                 order_item = PurchaseOrderItem(
                     shop_id=shop_id,
                     order_id=order.id,
-                    product_id=product.id,
-                    product_name=product.name,
-                    product_sku=product.sku,
+                    product_id=product.id if product else None,
+                    product_name=item_data['product_name'],
+                    product_sku=item_data['product_sku'],
                     quantity=item_data['quantity'],
                     price=item_data['price'],
                     total=item_data['total']
@@ -646,11 +646,41 @@ def init_supplier_routes(app):
             # If moving TO Received, add stock
             if new_status == 'Received' and old_status != 'Received':
                 for item in order.items:
-                    product = Product.query.filter_by(id=item.product_id, shop_id=shop_id).first()
-                    if product:
-                        product.stock += item.quantity
-                        product.updated_at = datetime.utcnow()
-                        logger.info(f"Stock added for product {product.name}: +{item.quantity}")
+                    product = None
+                    # Try to find existing product by ID or name
+                    if item.product_id:
+                        product = Product.query.filter_by(id=item.product_id, shop_id=shop_id).first()
+                    
+                    # If product doesn't exist, create it from the order item
+                    if not product:
+                        # Check if a product with the same name exists
+                        product = Product.query.filter_by(
+                            name=item.product_name,
+                            shop_id=shop_id
+                        ).first()
+                    
+                    # If still no product, create a new one
+                    if not product:
+                        # Generate a proper SKU
+                        sku_parts = item.product_name[:3].upper()
+                        product = Product(
+                            shop_id=shop_id,
+                            name=item.product_name,
+                            sku=f"{sku_parts}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+                            price=item.price,
+                            stock=0,  # Will be updated below
+                            description=f"Added from purchase order {order.order_number}",
+                            supplier_id=order.supplier_id
+                        )
+                        db.session.add(product)
+                        db.session.flush()
+                        # Update the order item with the new product ID
+                        item.product_id = product.id
+                    
+                    # Add stock
+                    product.stock += item.quantity
+                    product.updated_at = datetime.utcnow()
+                    logger.info(f"Stock added for product {product.name}: +{item.quantity}")
             
             # Update order status
             order.status = new_status

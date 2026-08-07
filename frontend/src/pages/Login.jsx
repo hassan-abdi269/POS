@@ -1,6 +1,6 @@
 // src/pages/Login.jsx
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   Mail, 
   Lock, 
@@ -11,34 +11,78 @@ import {
   AlertCircle,
   CheckCircle
 } from 'lucide-react';
+import { authService } from '../service/api';
 
 const ShopLogin = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  
+  // Use refs to prevent multiple redirects and effect runs
+  const hasRedirected = useRef(false);
+  const isMounted = useRef(true);
 
-  // Check if already logged in as shop
+  // Check if already logged in - runs when path changes
   useEffect(() => {
-    const isShopAuthenticated = localStorage.getItem('shopToken') === 'authenticated';
-    const userRole = localStorage.getItem('userRole');
+    // Prevent multiple executions
+    if (hasRedirected.current) return;
     
-    if (isShopAuthenticated && userRole === 'shop') {
-      navigate('/dashboard');
-    }
+    const checkAuth = async () => {
+      try {
+        // Only check if we haven't redirected yet
+        if (hasRedirected.current) return;
+        
+        const user = authService.getCurrentUser();
+        const role = authService.getUserRole();
+        
+        console.log('🔍 Checking auth - User:', user, 'Role:', role, 'Path:', location.pathname);
+        
+        if (user && role === 'shop_admin') {
+          // Only redirect if not already on a shop route
+          if (!location.pathname.startsWith('/dashboard')) {
+            hasRedirected.current = true;
+            console.log('✅ Redirecting to shop dashboard');
+            navigate('/dashboard', { replace: true });
+          }
+          return;
+        }
+        
+        if (user && role === 'super_admin') {
+          // Only redirect if not already on a super admin route
+          if (!location.pathname.startsWith('/superadmin')) {
+            hasRedirected.current = true;
+            console.log('✅ Redirecting to super admin dashboard');
+            navigate('/superadmin/dashboard', { replace: true });
+          }
+          return;
+        }
+        
+        console.log('ℹ️ No authenticated user found');
+      } catch (error) {
+        console.error('❌ Auth check error:', error);
+      }
+    };
     
-    // If super admin is logged in, redirect to super admin dashboard
-    if (localStorage.getItem('superAdminToken') && userRole === 'superadmin') {
-      navigate('/superadmin/dashboard');
-    }
-  }, [navigate]);
+    // Run check
+    checkAuth();
+    
+    // Cleanup
+    return () => {
+      isMounted.current = false;
+    };
+  }, [location.pathname]); // Re-run when path changes
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Prevent multiple submissions
+    if (isLoading || hasRedirected.current) return;
+    
     setError('');
     setSuccess('');
     
@@ -54,43 +98,29 @@ const ShopLogin = () => {
     setIsLoading(true);
     
     try {
-      const response = await fetch('http://localhost:5000/api/shop/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
+      console.log('📤 Attempting shop login...');
+      const data = await authService.shopLogin({ email, password });
+      
+      console.log('📥 Login response:', data);
+      
+      if (data.success && data.shop) {
         setSuccess('Login successful! Redirecting...');
         
-        // Store shop data in localStorage
-        localStorage.setItem('shop', JSON.stringify(data.shop));
-        localStorage.setItem('shopToken', 'authenticated');
-        localStorage.setItem('userRole', 'shop');
-        localStorage.setItem('shopId', data.shop.id);
+        // Set redirect flag to prevent loop
+        hasRedirected.current = true;
         
-        if (rememberMe) {
-          localStorage.setItem('rememberShop', 'true');
-        }
-        
-        // Clear any super admin data if exists
-        localStorage.removeItem('superAdminToken');
-        
+        // Navigate after a short delay
         setTimeout(() => {
-          navigate('/dashboard');
-        }, 1000);
+          console.log('🚀 Navigating to dashboard');
+          navigate('/dashboard', { replace: true });
+        }, 800);
       } else {
         setError(data.error || 'Login failed. Please try again.');
+        setIsLoading(false);
       }
     } catch (error) {
-      console.error('Login error:', error);
-      setError('Network error. Please check if the server is running.');
-    } finally {
+      console.error('❌ Login error:', error);
+      setError(error.message || 'Network error. Please check if the server is running.');
       setIsLoading(false);
     }
   };
@@ -105,7 +135,7 @@ const ShopLogin = () => {
             </div>
           </div>
           <h2 className="mt-4 text-3xl font-bold text-gray-900">POS System</h2>
-          <p className="mt-2 text-sm text-gray-600">Sign in to your shop dashboard</p>
+          <p className="mt-2 text-sm text-gray-600">Sign in to your dashboard</p>
         </div>
 
         {error && (
@@ -125,7 +155,7 @@ const ShopLogin = () => {
           <div className="space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">
-                Shop Email Address
+                Email Address
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -140,7 +170,8 @@ const ShopLogin = () => {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="appearance-none relative block w-full px-3 py-3 pl-10 border border-gray-300 rounded-lg placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white hover:bg-gray-50 transition-colors"
-                  placeholder="Enter your shop email"
+                  placeholder="Enter your email"
+                  disabled={isLoading || hasRedirected.current}
                 />
               </div>
             </div>
@@ -163,11 +194,13 @@ const ShopLogin = () => {
                   onChange={(e) => setPassword(e.target.value)}
                   className="appearance-none relative block w-full px-3 py-3 pl-10 pr-10 border border-gray-300 rounded-lg placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white hover:bg-gray-50 transition-colors"
                   placeholder="Enter your password"
+                  disabled={isLoading || hasRedirected.current}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                  disabled={isLoading || hasRedirected.current}
                 >
                   {showPassword ? (
                     <EyeOff className="h-5 w-5 text-gray-400 hover:text-gray-600 transition-colors" />
@@ -179,34 +212,12 @@ const ShopLogin = () => {
             </div>
           </div>
 
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <input
-                id="remember-me"
-                name="remember-me"
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
-                Remember me
-              </label>
-            </div>
-
-            <div className="text-sm">
-              <a href="#" className="font-medium text-blue-600 hover:text-blue-500 transition-colors">
-                Forgot password?
-              </a>
-            </div>
-          </div>
-
           <div>
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || hasRedirected.current}
               className={`group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200 ${
-                isLoading ? 'opacity-70 cursor-not-allowed' : 'hover:shadow-lg'
+                isLoading || hasRedirected.current ? 'opacity-70 cursor-not-allowed' : 'hover:shadow-lg'
               }`}
             >
               {isLoading ? (
@@ -214,6 +225,8 @@ const ShopLogin = () => {
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                   <span>Signing in...</span>
                 </div>
+              ) : hasRedirected.current ? (
+                <span>Redirecting...</span>
               ) : (
                 <div className="flex items-center gap-2">
                   <LogIn className="w-4 h-4" />

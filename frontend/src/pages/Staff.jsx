@@ -1,3 +1,5 @@
+// src/pages/Staff.jsx
+
 import React, { useState, useEffect } from 'react';
 import { 
   Search, 
@@ -21,8 +23,10 @@ import {
   X,
   Save,
   Building2,
-  DollarSign
+  DollarSign,
+  AlertCircle
 } from 'lucide-react';
+import { staffService, authService } from '../service/api';
 
 const Staff = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -73,25 +77,69 @@ const Staff = () => {
     notes: ''
   });
 
+  // Email validation state
+  const [emailError, setEmailError] = useState('');
+
+  // Get current shop ID
+  const getShopId = () => {
+    const user = authService.getCurrentUser();
+    return user?.shopId;
+  };
+
+  // Check if email exists in current shop
+  const checkEmailExistsInShop = async (email, excludeId = null) => {
+    if (!email) return false;
+    
+    const shopId = getShopId();
+    if (!shopId) return false;
+    
+    try {
+      const staff = await staffService.getAllStaff(shopId);
+      return staff.some(s => 
+        s.email.toLowerCase() === email.toLowerCase() &&
+        (excludeId === null || s.id !== excludeId)
+      );
+    } catch (error) {
+      console.error('Error checking email:', error);
+      return false;
+    }
+  };
+
+  // Validate email in real-time
+  const validateEmail = async (email) => {
+    if (!email) {
+      setEmailError('');
+      return;
+    }
+    
+    const exists = await checkEmailExistsInShop(email);
+    setEmailError(exists ? 'This email is already registered in this shop' : '');
+    return !exists;
+  };
+
   // Fetch staff
   const fetchStaff = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams();
-      if (searchTerm) params.append('search', searchTerm);
-      if (selectedStatus !== 'All') params.append('status', selectedStatus);
-      if (selectedRole !== 'All') params.append('role', selectedRole);
+      setError('');
       
-      const response = await fetch(`http://localhost:5000/api/staff?${params.toString()}`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setStaffData(data);
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
+
+      // Build params for filtering
+      const params = {};
+      if (searchTerm) params.search = searchTerm;
+      if (selectedStatus !== 'All') params.status = selectedStatus;
+      if (selectedRole !== 'All') params.role = selectedRole;
+
+      const data = await staffService.getAllStaff(shopId, params);
+      setStaffData(data);
     } catch (error) {
       console.error('Error fetching staff:', error);
-      setError('Failed to load staff');
+      setError(error.response?.data?.error || 'Failed to load staff');
     } finally {
       setLoading(false);
     }
@@ -100,13 +148,45 @@ const Staff = () => {
   // Fetch stats
   const fetchStats = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/staff/stats', {
-        credentials: 'include'
+      const shopId = getShopId();
+      if (!shopId) return;
+
+      // Get all staff to calculate stats
+      const staff = await staffService.getAllStaff(shopId);
+      
+      const total = staff.length;
+      const active = staff.filter(s => s.status === 'Active' || s.status === 'active').length;
+      const on_leave = staff.filter(s => s.status === 'On Leave' || s.status === 'on_leave').length;
+      const inactive = staff.filter(s => s.status === 'Inactive' || s.status === 'inactive').length;
+      const total_tasks = staff.reduce((sum, s) => sum + (s.tasks || 0), 0);
+      const total_salary = staff.reduce((sum, s) => sum + (s.salary || 0), 0);
+      const average_salary = total > 0 ? total_salary / total : 0;
+      
+      // Role breakdown
+      const role_breakdown = {};
+      staff.forEach(s => {
+        const role = s.role || 'Unknown';
+        role_breakdown[role] = (role_breakdown[role] || 0) + 1;
       });
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-      }
+      
+      // Department breakdown
+      const department_breakdown = {};
+      staff.forEach(s => {
+        const dept = s.department || 'Unknown';
+        department_breakdown[dept] = (department_breakdown[dept] || 0) + 1;
+      });
+
+      setStats({
+        total,
+        active,
+        on_leave,
+        inactive,
+        total_tasks,
+        total_salary,
+        average_salary,
+        role_breakdown,
+        department_breakdown
+      });
     } catch (error) {
       console.error('Error fetching stats:', error);
     }
@@ -121,7 +201,6 @@ const Staff = () => {
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchStaff();
-      fetchStats();
     }, 500);
     return () => clearTimeout(timer);
   }, [searchTerm, selectedStatus, selectedRole]);
@@ -132,32 +211,40 @@ const Staff = () => {
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch('http://localhost:5000/api/staff', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess(`Staff member ${data.full_name} added successfully!`);
-        setShowAddModal(false);
-        resetForm();
-        fetchStaff();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to add staff');
-        setTimeout(() => setError(''), 5000);
-      }
+    // Check if email already exists in this shop
+    const emailExists = await checkEmailExistsInShop(formData.email);
+    if (emailExists) {
+      setError(`Email ${formData.email} is already registered in this shop. Please use a different email.`);
+      return;
+    }
+
+    try {
+      const data = {
+        ...formData,
+        salary: parseFloat(formData.salary),
+        tasks: parseInt(formData.tasks) || 0
+      };
+      
+      const result = await staffService.createStaff(shopId, data);
+      setSuccess(`Staff member ${result.first_name} ${result.last_name} added successfully!`);
+      setShowAddModal(false);
+      resetForm();
+      await fetchStaff();
+      await fetchStats();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error adding staff:', error);
-      setError('Network error. Please check server connection.');
+      if (error.message && error.message.includes('already registered in this shop')) {
+        setError('This email is already registered in this shop. Please use a different email address.');
+      } else {
+        setError(error.response?.data?.error || 'Failed to add staff');
+      }
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -168,32 +255,40 @@ const Staff = () => {
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch(`http://localhost:5000/api/staff/${selectedStaff.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess(`Staff member ${data.full_name} updated successfully!`);
-        setShowEditModal(false);
-        resetForm();
-        fetchStaff();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to update staff');
-        setTimeout(() => setError(''), 5000);
-      }
+    // Check if email already exists in this shop (excluding current staff)
+    const emailExists = await checkEmailExistsInShop(formData.email, selectedStaff.id);
+    if (emailExists) {
+      setError(`Email ${formData.email} is already registered in this shop. Please use a different email.`);
+      return;
+    }
+
+    try {
+      const data = {
+        ...formData,
+        salary: parseFloat(formData.salary),
+        tasks: parseInt(formData.tasks) || 0
+      };
+      
+      const result = await staffService.updateStaff(shopId, selectedStaff.id, data);
+      setSuccess(`Staff member ${result.first_name} ${result.last_name} updated successfully!`);
+      setShowEditModal(false);
+      resetForm();
+      await fetchStaff();
+      await fetchStats();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error updating staff:', error);
-      setError('Network error. Please check server connection.');
+      if (error.message && error.message.includes('already registered in this shop')) {
+        setError('This email is already registered in this shop. Please use a different email address.');
+      } else {
+        setError(error.response?.data?.error || 'Failed to update staff');
+      }
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -201,25 +296,21 @@ const Staff = () => {
   // Handle delete staff
   const handleDeleteStaff = async (staffId) => {
     if (window.confirm('Are you sure you want to deactivate this staff member?')) {
-      try {
-        const response = await fetch(`http://localhost:5000/api/staff/${staffId}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
 
-        if (response.ok) {
-          setSuccess('Staff member deactivated successfully!');
-          fetchStaff();
-          fetchStats();
-          setTimeout(() => setSuccess(''), 5000);
-        } else {
-          const errorData = await response.json();
-          setError(errorData.error || 'Failed to deactivate staff');
-          setTimeout(() => setError(''), 5000);
-        }
+      try {
+        await staffService.deleteStaff(shopId, staffId);
+        setSuccess('Staff member deactivated successfully!');
+        await fetchStaff();
+        await fetchStats();
+        setTimeout(() => setSuccess(''), 5000);
       } catch (error) {
         console.error('Error deleting staff:', error);
-        setError('Network error. Please check server connection.');
+        setError(error.response?.data?.error || 'Failed to deactivate staff');
         setTimeout(() => setError(''), 5000);
       }
     }
@@ -246,6 +337,7 @@ const Staff = () => {
       tasks: 0,
       notes: ''
     });
+    setEmailError('');
     setSelectedStaff(null);
   };
 
@@ -253,24 +345,25 @@ const Staff = () => {
   const handleEdit = (staff) => {
     setSelectedStaff(staff);
     setFormData({
-      first_name: staff.first_name,
-      last_name: staff.last_name,
-      email: staff.email,
-      phone: staff.phone,
+      first_name: staff.first_name || '',
+      last_name: staff.last_name || '',
+      email: staff.email || '',
+      phone: staff.phone || '',
       address: staff.address || '',
       city: staff.city || '',
       state: staff.state || '',
       country: staff.country || '',
       postal_code: staff.postal_code || '',
-      role: staff.role,
-      department: staff.department,
-      join_date: staff.join_date,
-      salary: staff.salary.toString(),
-      status: staff.status,
-      performance: staff.performance,
-      tasks: staff.tasks,
+      role: staff.role || 'Cashier',
+      department: staff.department || 'Sales',
+      join_date: staff.join_date || new Date().toISOString().split('T')[0],
+      salary: staff.salary?.toString() || '',
+      status: staff.status || 'Active',
+      performance: staff.performance || 'Good',
+      tasks: staff.tasks || 0,
       notes: staff.notes || ''
     });
+    setEmailError('');
     setShowEditModal(true);
   };
 
@@ -328,9 +421,10 @@ const Staff = () => {
   return (
     <div>
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-          {error}
-          <button onClick={() => setError('')} className="ml-2 text-red-500 hover:text-red-700">×</button>
+        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="ml-auto text-red-500 hover:text-red-700">×</button>
         </div>
       )}
       {success && (
@@ -489,6 +583,7 @@ const Staff = () => {
                   <td colSpan="9" className="text-center py-12 text-gray-500">
                     <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                     <p className="text-lg font-medium">No staff members found</p>
+                    <p className="text-sm mt-1">Try adjusting your search or filters</p>
                   </td>
                 </tr>
               ) : (
@@ -496,11 +591,11 @@ const Staff = () => {
                   <tr key={staff.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(staff.full_name)} flex items-center justify-center text-white font-semibold text-xs`}>
-                          {staff.first_name.charAt(0)}{staff.last_name.charAt(0)}
+                        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${getAvatarColor(staff.first_name + ' ' + staff.last_name)} flex items-center justify-center text-white font-semibold text-xs`}>
+                          {staff.first_name?.charAt(0)}{staff.last_name?.charAt(0)}
                         </div>
                         <div>
-                          <span className="font-medium text-gray-900">{staff.full_name}</span>
+                          <span className="font-medium text-gray-900">{staff.first_name} {staff.last_name}</span>
                           <div className="text-xs text-gray-400">{staff.employee_id}</div>
                         </div>
                       </div>
@@ -525,7 +620,7 @@ const Staff = () => {
                     </td>
                     <td className="py-3 px-4 text-gray-600">{staff.department}</td>
                     <td className="py-3 px-4 text-gray-600">{staff.join_date}</td>
-                    <td className="py-3 px-4 text-gray-600">{staff.tasks}</td>
+                    <td className="py-3 px-4 text-gray-600">{staff.tasks || 0}</td>
                     <td className="py-3 px-4">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                         <span className={`w-1.5 h-1.5 rounded-full ${getPerformanceDot(staff.performance)}`}></span>
@@ -624,10 +719,16 @@ const Staff = () => {
                     type="email"
                     required
                     value={formData.email}
-                    onChange={(e) => setFormData({...formData, email: e.target.value})}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onChange={(e) => {
+                      setFormData({...formData, email: e.target.value});
+                      validateEmail(e.target.value);
+                    }}
+                    className={`w-full px-3 py-2 border ${emailError ? 'border-red-500' : 'border-gray-200'} rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500`}
                     placeholder="email@example.com"
                   />
+                  {emailError && (
+                    <p className="mt-1 text-sm text-red-500">{emailError}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -829,7 +930,12 @@ const Staff = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                  disabled={!!emailError}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    emailError 
+                      ? 'bg-gray-300 cursor-not-allowed text-gray-500' 
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
                 >
                   <Save className="w-4 h-4" />
                   Add Staff
@@ -893,10 +999,16 @@ const Staff = () => {
                     type="email"
                     required
                     value={formData.email}
-                    onChange={(e) => setFormData({...formData, email: e.target.value})}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onChange={(e) => {
+                      setFormData({...formData, email: e.target.value});
+                      validateEmail(e.target.value);
+                    }}
+                    className={`w-full px-3 py-2 border ${emailError ? 'border-red-500' : 'border-gray-200'} rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500`}
                     placeholder="email@example.com"
                   />
+                  {emailError && (
+                    <p className="mt-1 text-sm text-red-500">{emailError}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1098,7 +1210,12 @@ const Staff = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
+                  disabled={!!emailError}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    emailError 
+                      ? 'bg-gray-300 cursor-not-allowed text-gray-500' 
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
                 >
                   <Save className="w-4 h-4" />
                   Update Staff
@@ -1125,11 +1242,11 @@ const Staff = () => {
 
             <div className="p-6 space-y-4">
               <div className="flex items-center gap-4 mb-4">
-                <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${getAvatarColor(selectedStaff.full_name)} flex items-center justify-center text-white font-semibold text-2xl`}>
-                  {selectedStaff.first_name.charAt(0)}{selectedStaff.last_name.charAt(0)}
+                <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${getAvatarColor(selectedStaff.first_name + ' ' + selectedStaff.last_name)} flex items-center justify-center text-white font-semibold text-2xl`}>
+                  {selectedStaff.first_name?.charAt(0)}{selectedStaff.last_name?.charAt(0)}
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900">{selectedStaff.full_name}</h3>
+                  <h3 className="text-xl font-bold text-gray-900">{selectedStaff.first_name} {selectedStaff.last_name}</h3>
                   <div className="flex items-center gap-2 mt-1">
                     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border border-gray-200`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${getStatusDot(selectedStaff.status)}`}></span>
@@ -1165,11 +1282,11 @@ const Staff = () => {
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Salary</p>
-                  <p className="font-medium text-gray-900">KES {selectedStaff.salary.toLocaleString()}</p>
+                  <p className="font-medium text-gray-900">KES {selectedStaff.salary?.toLocaleString() || '0'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Tasks</p>
-                  <p className="font-medium text-gray-900">{selectedStaff.tasks}</p>
+                  <p className="font-medium text-gray-900">{selectedStaff.tasks || 0}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Performance</p>

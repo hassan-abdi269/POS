@@ -1,3 +1,5 @@
+// src/pages/Dashboard.jsx
+
 import React, { useState, useEffect } from 'react';
 import { 
   Phone, 
@@ -21,6 +23,13 @@ import {
   Box,
   Tag
 } from 'lucide-react';
+import { 
+  inventoryService, 
+  salesService, 
+  customerService, 
+  analyticsService,
+  authService 
+} from '../service/api';
 
 const Dashboard = () => {
   const [loading, setLoading] = useState(true);
@@ -77,40 +86,52 @@ const Dashboard = () => {
     },
   ];
 
-  // Fetch all dashboard data from real APIs
+  // Fetch all dashboard data using API service
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
       setError('');
 
-      // Fetch ALL products
-      const productsRes = await fetch('http://localhost:5000/api/products', {
-        credentials: 'include'
-      });
+      // Get current shop ID from authenticated user
+      const user = authService.getCurrentUser();
+      const shopId = user?.shopId;
+
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        setLoading(false);
+        return;
+      }
+
+      console.log('📡 Fetching dashboard data for shop:', shopId);
+
+      // Fetch products
       let products = [];
-      if (productsRes.ok) {
-        products = await productsRes.json();
+      try {
+        products = await inventoryService.getAllProducts(shopId);
         console.log('✅ Products fetched:', products.length);
+      } catch (err) {
+        console.warn('⚠️ Could not fetch products:', err);
+        products = [];
       }
 
       // Fetch sales
-      const salesRes = await fetch('http://localhost:5000/api/sales', {
-        credentials: 'include'
-      });
       let sales = [];
-      if (salesRes.ok) {
-        sales = await salesRes.json();
+      try {
+        sales = await salesService.getAllSales(shopId);
         console.log('✅ Sales fetched:', sales.length);
+      } catch (err) {
+        console.warn('⚠️ Could not fetch sales:', err);
+        sales = [];
       }
 
       // Fetch customers
-      const customersRes = await fetch('http://localhost:5000/api/customers', {
-        credentials: 'include'
-      });
       let customers = [];
-      if (customersRes.ok) {
-        customers = await customersRes.json();
+      try {
+        customers = await customerService.getAllCustomers(shopId);
         console.log('✅ Customers fetched:', customers.length);
+      } catch (err) {
+        console.warn('⚠️ Could not fetch customers:', err);
+        customers = [];
       }
 
       // Calculate stats from REAL product data
@@ -121,16 +142,13 @@ const Dashboard = () => {
       const lowStock = products.filter(p => p.stock >= 25 && p.stock <= 50).length;
       const outOfStock = products.filter(p => p.stock <= 24).length;
       
-      // Calculate total value of all products
-      const totalProductValue = products.reduce((sum, p) => sum + (p.price * p.stock || 0), 0);
-      
-      // Sales stats - from your actual sales data
+      // Sales stats from actual sales data
       const totalRevenue = sales.reduce((sum, s) => sum + (s.total || 0), 0);
       const totalOrders = sales.length;
-      const completedOrders = sales.filter(s => s.status === 'Completed').length;
-      const pendingOrders = sales.filter(s => s.status === 'Pending').length;
-      const cancelledOrders = sales.filter(s => s.status === 'Cancelled').length;
-      const refundedOrders = sales.filter(s => s.status === 'Refunded').length;
+      const completedOrders = sales.filter(s => s.status === 'Completed' || s.status === 'completed').length;
+      const pendingOrders = sales.filter(s => s.status === 'Pending' || s.status === 'pending').length;
+      const cancelledOrders = sales.filter(s => s.status === 'Cancelled' || s.status === 'cancelled').length;
+      const refundedOrders = sales.filter(s => s.status === 'Refunded' || s.status === 'refunded').length;
 
       // Get recent sales (last 5)
       const recentSales = sales.slice(0, 5).map(s => ({
@@ -138,12 +156,12 @@ const Dashboard = () => {
         customer_name: s.customer_name || 'Walk-in Customer'
       }));
 
-      // Get customer contacts from REAL customers only
+      // Get customer contacts from REAL customers
       let customerContacts = customers.slice(0, 5).map(c => ({
-        name: `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email,
+        name: `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email || 'Unknown Customer',
         phone: c.phone || 'N/A',
         type: 'Email',
-        summary: `Customer since ${new Date(c.created_at).toLocaleDateString()}`,
+        summary: `Customer since ${c.created_at ? new Date(c.created_at).toLocaleDateString() : 'N/A'}`,
         status: c.status || 'Active'
       }));
 
@@ -153,16 +171,16 @@ const Dashboard = () => {
           name: s.customer_name || 'Walk-in Customer',
           phone: s.customer_phone || 'N/A',
           type: 'Email',
-          summary: `Order #${s.sale_number || s.id}`,
+          summary: `Order #${s.sale_number || s.id || 'N/A'}`,
           status: s.status || 'Active'
         }));
       }
 
       // Calculate purchase history from REAL sales
-      const pendingTotal = sales.filter(s => s.status === 'Pending').reduce((sum, s) => sum + (s.total || 0), 0);
-      const completedTotal = sales.filter(s => s.status === 'Completed').reduce((sum, s) => sum + (s.total || 0), 0);
-      const cancelledTotal = sales.filter(s => s.status === 'Cancelled').reduce((sum, s) => sum + (s.total || 0), 0);
-      const refundedTotal = sales.filter(s => s.status === 'Refunded').reduce((sum, s) => sum + (s.total || 0), 0);
+      const pendingTotal = sales.filter(s => s.status === 'Pending' || s.status === 'pending').reduce((sum, s) => sum + (s.total || 0), 0);
+      const completedTotal = sales.filter(s => s.status === 'Completed' || s.status === 'completed').reduce((sum, s) => sum + (s.total || 0), 0);
+      const cancelledTotal = sales.filter(s => s.status === 'Cancelled' || s.status === 'cancelled').reduce((sum, s) => sum + (s.total || 0), 0);
+      const refundedTotal = sales.filter(s => s.status === 'Refunded' || s.status === 'refunded').reduce((sum, s) => sum + (s.total || 0), 0);
 
       const purchaseHistory = [
         { label: 'Pending', amount: pendingTotal.toFixed(2) },
@@ -170,6 +188,11 @@ const Dashboard = () => {
         { label: 'Cancelled', amount: cancelledTotal.toFixed(2) },
         { label: 'Refunded', amount: refundedTotal.toFixed(2) },
       ].filter(item => parseFloat(item.amount) > 0);
+
+      // If no purchase history, add sample data to show the UI
+      if (purchaseHistory.length === 0) {
+        purchaseHistory.push({ label: 'No Sales', amount: '0.00' });
+      }
 
       setDashboardData({
         stats: {
@@ -193,7 +216,7 @@ const Dashboard = () => {
 
     } catch (error) {
       console.error('❌ Error fetching dashboard data:', error);
-      setError('Failed to load dashboard data. Please check your connection.');
+      setError(error.response?.data?.error || 'Failed to load dashboard data. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -218,12 +241,16 @@ const Dashboard = () => {
       'In Stock': 'bg-green-100 text-green-700',
       'Active': 'bg-green-100 text-green-700',
       'Completed': 'bg-green-100 text-green-700',
+      'completed': 'bg-green-100 text-green-700',
       'Low Stock': 'bg-yellow-100 text-yellow-700',
       'Pending': 'bg-yellow-100 text-yellow-700',
+      'pending': 'bg-yellow-100 text-yellow-700',
       'Out of Stock': 'bg-red-100 text-red-700',
       'Inactive': 'bg-red-100 text-red-700',
       'Cancelled': 'bg-red-100 text-red-700',
+      'cancelled': 'bg-red-100 text-red-700',
       'Refunded': 'bg-purple-100 text-purple-700',
+      'refunded': 'bg-purple-100 text-purple-700',
     };
     return statusMap[status] || 'bg-gray-100 text-gray-600';
   };
@@ -267,14 +294,20 @@ const Dashboard = () => {
 
   if (error) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">
-        <p>{error}</p>
-        <button 
-          onClick={fetchDashboardData}
-          className="mt-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-        >
-          Retry
-        </button>
+      <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-red-700">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Error loading dashboard</p>
+            <p className="text-sm mt-1">{error}</p>
+            <button 
+              onClick={fetchDashboardData}
+              className="mt-3 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -291,13 +324,22 @@ const Dashboard = () => {
         <h3 className="text-lg font-semibold text-gray-700">No Data Available</h3>
         <p className="text-sm text-gray-500 mt-1">Start by adding products, customers, or creating sales.</p>
         <div className="flex gap-3 mt-4">
-          <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+          <button 
+            onClick={() => window.location.href = '/inventory'}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
             Add Product
           </button>
-          <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">
+          <button 
+            onClick={() => window.location.href = '/sales'}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+          >
             Create Sale
           </button>
-          <button className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+          <button 
+            onClick={() => window.location.href = '/customers'}
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+          >
             Add Customer
           </button>
         </div>
@@ -311,6 +353,18 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {statsData.map((stat, index) => {
           const Icon = stat.icon;
+          let displayValue;
+          
+          if (stat.title === 'Total Revenue') {
+            displayValue = `KES ${dashboardData.stats.totalRevenue.toFixed(2)}`;
+          } else if (stat.title === 'Total Products') {
+            displayValue = dashboardData.stats.totalProducts;
+          } else if (stat.title === 'Low Stock Alert') {
+            displayValue = dashboardData.stats.lowStock;
+          } else if (stat.title === 'Total Orders') {
+            displayValue = dashboardData.stats.totalOrders;
+          }
+          
           return (
             <div 
               key={index} 
@@ -319,16 +373,7 @@ const Dashboard = () => {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                  <p className="text-2xl font-bold text-gray-900 mt-1">
-                    {stat.title === 'Total Revenue' 
-                      ? `KES ${dashboardData.stats.totalRevenue.toFixed(2)}`
-                      : stat.title === 'Total Products'
-                      ? dashboardData.stats.totalProducts
-                      : stat.title === 'Low Stock Alert'
-                      ? dashboardData.stats.lowStock
-                      : dashboardData.stats.totalOrders
-                    }
-                  </p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">{displayValue}</p>
                   <p className="text-xs text-gray-500 mt-1">{stat.updated}</p>
                 </div>
                 <div className={`p-2 rounded-lg bg-white shadow-sm ${getStatTextColor(stat.color)}`}>
@@ -354,7 +399,10 @@ const Dashboard = () => {
               </span>
             </div>
           </div>
-          <button className="text-sm text-blue-600 hover:text-blue-700 transition-colors">
+          <button 
+            onClick={() => window.location.href = '/inventory'}
+            className="text-sm text-blue-600 hover:text-blue-700 transition-colors"
+          >
             View All Products →
           </button>
         </div>
@@ -394,8 +442,11 @@ const Dashboard = () => {
         {/* Products List - takes 2/3 */}
         <div className="lg:col-span-2">
           <div className="flex justify-between items-center mb-3">
-            <h3 className="font-semibold text-gray-900">Products</h3>
-            <button className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors">
+            <h3 className="font-semibold text-gray-900">Recent Products</h3>
+            <button 
+              onClick={() => window.location.href = '/inventory'}
+              className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+            >
               View All Products
             </button>
           </div>
@@ -447,7 +498,12 @@ const Dashboard = () => {
             <div className="bg-white border border-gray-200 rounded-xl p-8 text-center text-gray-500">
               <Package className="w-12 h-12 mx-auto text-gray-300 mb-3" />
               <p className="text-sm">No products yet</p>
-              <button className="mt-2 text-sm text-blue-600 hover:text-blue-700">Add your first product</button>
+              <button 
+                onClick={() => window.location.href = '/inventory'}
+                className="mt-2 text-sm text-blue-600 hover:text-blue-700"
+              >
+                Add your first product
+              </button>
             </div>
           )}
         </div>
@@ -458,7 +514,10 @@ const Dashboard = () => {
           <div>
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-semibold text-gray-900">Recent Customers</h3>
-              <button className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors">
+              <button 
+                onClick={() => window.location.href = '/customers'}
+                className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+              >
                 View All
               </button>
             </div>
@@ -490,11 +549,14 @@ const Dashboard = () => {
           <div>
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-semibold text-gray-900">Sales Summary</h3>
-              <button className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors">
+              <button 
+                onClick={() => window.location.href = '/sales'}
+                className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+              >
                 View All
               </button>
             </div>
-            {dashboardData.purchaseHistory.length > 0 ? (
+            {dashboardData.purchaseHistory.length > 0 && dashboardData.purchaseHistory[0].label !== 'No Sales' ? (
               <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
                 <div className="space-y-2">
                   {dashboardData.purchaseHistory.map((item, idx) => (
@@ -504,7 +566,8 @@ const Dashboard = () => {
                         item.label === 'Pending' ? 'text-yellow-600' : 
                         item.label === 'Completed' ? 'text-green-600' : 
                         item.label === 'Cancelled' ? 'text-red-600' : 
-                        'text-purple-600'
+                        item.label === 'Refunded' ? 'text-purple-600' :
+                        'text-gray-600'
                       }`}>
                         KES {item.amount}
                       </span>
@@ -528,7 +591,7 @@ const Dashboard = () => {
             )}
           </div>
 
-          {/* Completed Accuracy */}
+          {/* Completion Rate */}
           {dashboardData.stats.totalOrders > 0 && (
             <div>
               <div className="flex justify-between items-center mb-3">

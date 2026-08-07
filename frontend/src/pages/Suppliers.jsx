@@ -1,4 +1,4 @@
-// src/pages/Suppliers.jsx - COMPLETE WITH PDF & EXCEL DOWNLOAD (Table Only)
+// src/pages/Suppliers.jsx
 import React, { useState, useEffect } from 'react';
 import {
   Search,
@@ -36,8 +36,7 @@ import {
   FileSpreadsheet,
   Download
 } from 'lucide-react';
-
-const API_BASE_URL = 'http://localhost:5000/api';
+import { supplierService, inventoryService, authService, reportService, purchaseOrderService } from '../service/api';
 
 const Suppliers = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -64,7 +63,6 @@ const Suppliers = () => {
   // Orders states
   const [orders, setOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
-  const [orderViewMode, setOrderViewMode] = useState('table');
   const [orderFilterStatus, setOrderFilterStatus] = useState('All');
   const [orderSearchTerm, setOrderSearchTerm] = useState('');
   const [showOrderActions, setShowOrderActions] = useState(null);
@@ -82,7 +80,7 @@ const Suppliers = () => {
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
 
-  // Order form state - Updated for manual product entry
+  // Order form state
   const [orderForm, setOrderForm] = useState({
     supplier_id: '',
     order_date: new Date().toISOString().split('T')[0],
@@ -98,7 +96,7 @@ const Suppliers = () => {
   const [productPriceInput, setProductPriceInput] = useState('');
   const [productQuantityInput, setProductQuantityInput] = useState(1);
 
-  // Form state - Removed item_name
+  // Form state
   const [formData, setFormData] = useState({
     name: '',
     contact_person: '',
@@ -114,231 +112,144 @@ const Suppliers = () => {
     notes: ''
   });
 
-  // Fetch suppliers
-  const fetchSuppliers = async () => {
-    try {
-      setLoading(true);
-      const params = new URLSearchParams();
-      if (searchTerm) params.append('search', searchTerm);
-      if (selectedStatus !== 'All') params.append('status', selectedStatus);
-      if (selectedItemType !== 'All') params.append('item_name', selectedItemType);
-
-      const response = await fetch(`${API_BASE_URL}/suppliers?${params.toString()}`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setSupplierData(data);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to load suppliers');
-      }
-    } catch (error) {
-      console.error('Error fetching suppliers:', error);
-      setError('Failed to load suppliers. Please check server connection.');
-    } finally {
-      setLoading(false);
-    }
+  // Get current shop ID
+  const getShopId = () => {
+    const user = authService.getCurrentUser();
+    return user?.shopId;
   };
 
-  // Fetch purchase orders
+  // ✅ Fetch orders from purchase order API
   const fetchOrders = async () => {
     try {
       setOrdersLoading(true);
-      const params = new URLSearchParams();
-      if (orderFilterStatus !== 'All') params.append('status', orderFilterStatus);
+      setError('');
+      
+      const shopId = getShopId();
+      if (!shopId) return;
 
-      const response = await fetch(`${API_BASE_URL}/purchase-orders?${params.toString()}`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        let filteredData = data;
-        if (orderSearchTerm) {
-          filteredData = data.filter(order =>
-            order.order_number?.toLowerCase().includes(orderSearchTerm.toLowerCase()) ||
-            order.supplier_name?.toLowerCase().includes(orderSearchTerm.toLowerCase())
-          );
-        }
-        setOrders(filteredData);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to load orders');
-      }
+      const params = {};
+      if (orderFilterStatus !== 'All') params.status = orderFilterStatus;
+      
+      const data = await purchaseOrderService.getAllPurchaseOrders(params);
+      setOrders(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error fetching orders:', error);
-      setError('Failed to load orders. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to load orders');
     } finally {
       setOrdersLoading(false);
     }
   };
 
-  // Fetch a single order details
-  const fetchOrderDetails = async (orderId) => {
+  // Fetch suppliers
+  const fetchSuppliers = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/purchase-orders/${orderId}`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setSelectedOrder(data);
-        setShowOrderDetailModal(true);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to load order details');
+      setLoading(true);
+      setError('');
+      
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
-    } catch (error) {
-      console.error('Error fetching order details:', error);
-      setError('Failed to load order details');
-    }
-  };
 
-  // Fetch order status history
-  const fetchOrderHistory = async (orderId) => {
-    try {
-      setHistoryLoading(true);
-      const response = await fetch(`${API_BASE_URL}/purchase-orders/${orderId}/history`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setOrderStatusHistory(data);
-        const order = orders.find(o => o.id === orderId);
-        if (order) {
-          setSelectedOrderForHistory(order);
-        }
-        setShowHistoryModal(true);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to load order history');
-      }
+      const params = {};
+      if (searchTerm) params.search = searchTerm;
+      if (selectedStatus !== 'All') params.status = selectedStatus;
+      if (selectedItemType !== 'All') params.item_name = selectedItemType;
+
+      const data = await supplierService.getAllSuppliers(shopId, params);
+      setSupplierData(data);
+      
+      // Update stats
+      updateStats(data);
+      
     } catch (error) {
-      console.error('Error fetching order history:', error);
-      setError('Failed to load order history');
+      console.error('Error fetching suppliers:', error);
+      setError(error.response?.data?.error || 'Failed to load suppliers');
     } finally {
-      setHistoryLoading(false);
+      setLoading(false);
     }
   };
 
-  // ============ DOWNLOAD FUNCTIONS ============
-  
-  // Download order as PDF
-  const downloadOrderPDF = async (orderId) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/purchase-orders/${orderId}/export/pdf`, {
-        credentials: 'include'
+  // Update stats from suppliers data
+  const updateStats = (suppliers) => {
+    const total = suppliers.length;
+    const active = suppliers.filter(s => s.status === 'Active' || s.status === 'active').length;
+    const inactive = suppliers.filter(s => s.status === 'Inactive' || s.status === 'inactive').length;
+    const pending = suppliers.filter(s => s.status === 'Pending' || s.status === 'pending').length;
+    const total_products = suppliers.reduce((sum, s) => sum + (s.total_products || 0), 0);
+    
+    let total_orders = 0;
+    let total_spent = 0;
+    suppliers.forEach(s => {
+      const orders = s.purchase_orders || [];
+      total_orders += orders.length;
+      orders.forEach(o => {
+        total_spent += (o.total || 0);
       });
-      
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const order = orders.find(o => o.id === orderId);
-        a.download = `PO-${order?.order_number || orderId}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        setSuccess('PDF downloaded successfully!');
-        setTimeout(() => setSuccess(''), 3000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to download PDF');
-        setTimeout(() => setError(''), 5000);
-      }
-    } catch (error) {
-      console.error('Error downloading PDF:', error);
-      setError('Failed to download PDF');
-      setTimeout(() => setError(''), 5000);
-    }
-  };
+    });
+    
+    const category_breakdown = {};
+    suppliers.forEach(s => {
+      const category = s.category || 'General';
+      category_breakdown[category] = (category_breakdown[category] || 0) + 1;
+    });
 
-  // Download order as Excel
-  const downloadOrderExcel = async (orderId) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/purchase-orders/${orderId}/export/excel`, {
-        credentials: 'include'
-      });
-      
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const order = orders.find(o => o.id === orderId);
-        a.download = `PO-${order?.order_number || orderId}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        setSuccess('Excel downloaded successfully!');
-        setTimeout(() => setSuccess(''), 3000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to download Excel');
-        setTimeout(() => setError(''), 5000);
-      }
-    } catch (error) {
-      console.error('Error downloading Excel:', error);
-      setError('Failed to download Excel');
-      setTimeout(() => setError(''), 5000);
-    }
+    setStats({
+      total,
+      active,
+      inactive,
+      pending,
+      total_products,
+      total_orders,
+      total_spent,
+      category_breakdown
+    });
   };
 
   // Fetch product names from inventory
   const fetchProductNames = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/products`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const names = data
-          .map(product => product.name)
-          .filter(name => name)
-          .sort();
-        const uniqueNames = [...new Set(names)];
-        setProductNames(uniqueNames);
-      }
+      const shopId = getShopId();
+      if (!shopId) return;
+
+      const data = await inventoryService.getAllProducts(shopId);
+      const names = data
+        .map(product => product.name)
+        .filter(name => name)
+        .sort();
+      const uniqueNames = [...new Set(names)];
+      setProductNames(uniqueNames);
     } catch (error) {
       console.error('Error fetching product names:', error);
     }
   };
 
-  // Fetch stats
-  const fetchStats = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/suppliers/stats`, {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-      }
-    } catch (error) {
-      console.error('Error fetching stats:', error);
-    }
-  };
-
   useEffect(() => {
-    fetchSuppliers();
-    fetchProductNames();
-    fetchStats();
-    fetchOrders();
+    const loadData = async () => {
+      setLoading(true);
+      await Promise.all([
+        fetchSuppliers(),
+        fetchProductNames(),
+        fetchOrders()
+      ]);
+      setLoading(false);
+    };
+    loadData();
   }, []);
 
-  // Handle search and filter changes
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchSuppliers();
-      fetchStats();
-      fetchOrders();
     }, 500);
     return () => clearTimeout(timer);
-  }, [searchTerm, selectedStatus, selectedItemType, orderFilterStatus, orderSearchTerm]);
+  }, [searchTerm, selectedStatus, selectedItemType]);
 
-  // Calculate order totals when items change - Removed tax
+  // ✅ Fetch orders when filters change
+  useEffect(() => {
+    fetchOrders();
+  }, [orderFilterStatus, orderSearchTerm]);
+
   useEffect(() => {
     const subtotal = orderForm.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const total = subtotal - orderForm.discount;
@@ -349,74 +260,64 @@ const Suppliers = () => {
     }));
   }, [orderForm.items, orderForm.discount]);
 
-  // Handle form submit - Add Supplier (Updated - removed item_name)
+  // Handle form submit - Add Supplier
   const handleAddSupplier = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch(`${API_BASE_URL}/suppliers`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess('Supplier added successfully!');
-        setShowAddModal(false);
-        resetForm();
-        fetchSuppliers();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to add supplier');
-        setTimeout(() => setError(''), 5000);
-      }
+    try {
+      const data = {
+        ...formData,
+        rating: parseFloat(formData.rating) || 0
+      };
+      
+      const result = await supplierService.createSupplier(shopId, data);
+      setSuccess(`Supplier ${result.name} added successfully!`);
+      setShowAddModal(false);
+      resetForm();
+      await fetchSuppliers();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error adding supplier:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to add supplier');
       setTimeout(() => setError(''), 5000);
     }
   };
 
-  // Handle form submit - Update Supplier (Updated - removed item_name)
+  // Handle form submit - Update Supplier
   const handleUpdateSupplier = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
 
-    try {
-      const response = await fetch(`${API_BASE_URL}/suppliers/${selectedSupplier.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(formData),
-      });
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
-      if (response.ok) {
-        const data = await response.json();
-        setSuccess('Supplier updated successfully!');
-        setShowEditModal(false);
-        resetForm();
-        fetchSuppliers();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to update supplier');
-        setTimeout(() => setError(''), 5000);
-      }
+    try {
+      const data = {
+        ...formData,
+        rating: parseFloat(formData.rating) || 0
+      };
+      
+      const result = await supplierService.updateSupplier(shopId, selectedSupplier.id, data);
+      setSuccess(`Supplier ${result.name} updated successfully!`);
+      setShowEditModal(false);
+      resetForm();
+      await fetchSuppliers();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error updating supplier:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to update supplier');
       setTimeout(() => setError(''), 5000);
     }
   };
@@ -424,62 +325,51 @@ const Suppliers = () => {
   // Handle delete supplier
   const handleDeleteSupplier = async (supplierId) => {
     if (window.confirm('Are you sure you want to deactivate this supplier?')) {
-      try {
-        const response = await fetch(`${API_BASE_URL}/suppliers/${supplierId}`, {
-          method: 'DELETE',
-          credentials: 'include'
-        });
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
 
-        if (response.ok) {
-          setSuccess('Supplier deactivated successfully!');
-          fetchSuppliers();
-          fetchStats();
-          setTimeout(() => setSuccess(''), 5000);
-        } else {
-          const errorData = await response.json();
-          setError(errorData.error || 'Failed to deactivate supplier');
-          setTimeout(() => setError(''), 5000);
-        }
+      try {
+        await supplierService.deleteSupplier(shopId, supplierId);
+        setSuccess('Supplier deactivated successfully!');
+        await fetchSuppliers();
+        setTimeout(() => setSuccess(''), 5000);
       } catch (error) {
         console.error('Error deleting supplier:', error);
-        setError('Network error. Please check server connection.');
+        setError(error.response?.data?.error || 'Failed to deactivate supplier');
         setTimeout(() => setError(''), 5000);
       }
     }
   };
 
-  // Handle update order status - Uses PATCH endpoint
+  // ✅ Update order status using purchase order API
   const handleUpdateOrderStatus = async (orderId, newStatus) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/purchase-orders/${orderId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ status: newStatus }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setSuccess(data.message || `Order status updated to ${newStatus}`);
-        fetchOrders();
-        fetchStats();
-        setTimeout(() => setSuccess(''), 5000);
-        setShowOrderActions(null);
-      } else {
-        setError(data.error || 'Failed to update order status');
-        setTimeout(() => setError(''), 5000);
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
       }
+
+      const result = await purchaseOrderService.updatePurchaseOrderStatus(orderId, newStatus);
+      
+      setSuccess(`Order status updated to ${newStatus}`);
+      await Promise.all([
+        fetchOrders(),
+        fetchSuppliers()
+      ]);
+      setTimeout(() => setSuccess(''), 5000);
+      setShowOrderActions(null);
     } catch (error) {
       console.error('Error updating order:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to update order status');
       setTimeout(() => setError(''), 5000);
     }
   };
 
-  // Reset form (Updated - removed item_name)
+  // Reset form
   const resetForm = () => {
     setFormData({
       name: '',
@@ -514,7 +404,7 @@ const Suppliers = () => {
     setProductQuantityInput(1);
   };
 
-  // Add product to order - Manual entry
+  // Add product to order
   const addProductToOrder = () => {
     if (!productNameInput.trim()) {
       setError('Please enter a product name');
@@ -530,7 +420,7 @@ const Suppliers = () => {
     }
 
     const newItem = {
-      id: Date.now(), // Temporary ID for the item
+      id: Date.now() + Math.random(),
       product_name: productNameInput.trim(),
       price: parseFloat(productPriceInput),
       quantity: parseInt(productQuantityInput)
@@ -581,11 +471,17 @@ const Suppliers = () => {
     }));
   };
 
-  // Submit order - Uses POST endpoint (Updated - removed tax, supports manual entry)
+  // ✅ Submit order using purchase order API
   const handleSubmitOrder = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
+
+    const shopId = getShopId();
+    if (!shopId) {
+      setError('Shop not found. Please login again.');
+      return;
+    }
 
     if (orderForm.items.length === 0) {
       setError('Please add at least one product to the order');
@@ -606,57 +502,46 @@ const Suppliers = () => {
           quantity: item.quantity,
           price: item.price
         })),
-        tax: 0,
+        subtotal: orderForm.subtotal,
         discount: orderForm.discount || 0,
-        notes: orderForm.notes
+        total: orderForm.total,
+        notes: orderForm.notes || ''
       };
 
-      console.log('Sending order data:', orderData);
-
-      const response = await fetch(`${API_BASE_URL}/purchase-orders`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(orderData),
-      });
-
-      const responseData = await response.json();
-
-      if (response.ok) {
-        setSuccess(`Purchase Order #${responseData.order_number || responseData.id} created successfully!`);
-        setShowOrderModal(false);
-        resetOrderForm();
-        fetchSuppliers();
-        fetchStats();
-        fetchOrders();
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        setError(responseData.error || 'Failed to create order');
-        setTimeout(() => setError(''), 5000);
-      }
+      const result = await purchaseOrderService.createPurchaseOrder(orderData);
+      
+      setSuccess(`Purchase Order ${result.order_number} created successfully!`);
+      setShowOrderModal(false);
+      resetOrderForm();
+      
+      // Refresh both orders and suppliers
+      await Promise.all([
+        fetchOrders(),
+        fetchSuppliers()
+      ]);
+      
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error creating order:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to create order');
       setTimeout(() => setError(''), 5000);
     }
   };
 
-  // Handle edit (Updated - removed item_name)
+  // Handle edit
   const handleEdit = (supplier) => {
     setSelectedSupplier(supplier);
     setFormData({
-      name: supplier.name,
-      contact_person: supplier.contact_person,
-      email: supplier.email,
-      phone: supplier.phone,
+      name: supplier.name || '',
+      contact_person: supplier.contact_person || '',
+      email: supplier.email || '',
+      phone: supplier.phone || '',
       address: supplier.address || '',
       city: supplier.city || '',
       state: supplier.state || '',
       country: supplier.country || '',
       postal_code: supplier.postal_code || '',
-      status: supplier.status,
+      status: supplier.status || 'Active',
       rating: supplier.rating || 0,
       notes: supplier.notes || ''
     });
@@ -669,7 +554,7 @@ const Suppliers = () => {
     setShowViewModal(true);
   };
 
-  // Handle open order modal for a specific supplier
+  // Handle open order modal
   const handleOpenOrderModal = (supplier) => {
     setSelectedSupplier(supplier);
     setOrderForm(prev => ({
@@ -681,7 +566,85 @@ const Suppliers = () => {
 
   // Handle view order details
   const handleViewOrder = (order) => {
-    fetchOrderDetails(order.id);
+    setSelectedOrder(order);
+    setShowOrderDetailModal(true);
+  };
+
+  // ✅ Fetch order history using purchase order API
+  const fetchOrderHistory = async (orderId) => {
+    try {
+      setHistoryLoading(true);
+      
+      const history = await purchaseOrderService.getOrderHistory(orderId);
+      setOrderStatusHistory(history || []);
+      
+      // Get the order details
+      const order = await purchaseOrderService.getPurchaseOrder(orderId);
+      setSelectedOrderForHistory(order);
+      setShowHistoryModal(true);
+    } catch (error) {
+      console.error('Error fetching order history:', error);
+      setError(error.response?.data?.error || 'Failed to load order history');
+      setTimeout(() => setError(''), 5000);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // ✅ Download order PDF using purchase order API
+  const downloadOrderPDF = async (orderId) => {
+    try {
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      const blob = await purchaseOrderService.exportOrderPDF(orderId);
+      
+      const link = document.createElement('a');
+      link.download = `PO-${orderId}.pdf`;
+      link.href = URL.createObjectURL(blob);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+      
+      setSuccess('PDF downloaded successfully!');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      setError(error.response?.data?.error || 'Failed to download PDF');
+      setTimeout(() => setError(''), 5000);
+    }
+  };
+
+  // ✅ Download order Excel using purchase order API
+  const downloadOrderExcel = async (orderId) => {
+    try {
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      const blob = await purchaseOrderService.exportOrderExcel(orderId);
+      
+      const link = document.createElement('a');
+      link.download = `PO-${orderId}.xlsx`;
+      link.href = URL.createObjectURL(blob);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+      
+      setSuccess('Excel downloaded successfully!');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (error) {
+      console.error('Error downloading Excel:', error);
+      setError(error.response?.data?.error || 'Failed to download Excel');
+      setTimeout(() => setError(''), 5000);
+    }
   };
 
   // Get order status color
@@ -705,19 +668,13 @@ const Suppliers = () => {
     }
   };
 
-  // Get available status transitions
   const getAvailableStatusTransitions = (currentStatus) => {
     switch (currentStatus) {
-      case 'Pending':
-        return ['Ordered', 'Cancelled'];
-      case 'Ordered':
-        return ['Received', 'Cancelled', 'Pending'];
-      case 'Received':
-        return ['Pending', 'Ordered'];
-      case 'Cancelled':
-        return ['Pending', 'Ordered'];
-      default:
-        return [];
+      case 'Pending': return ['Ordered', 'Cancelled'];
+      case 'Ordered': return ['Received', 'Cancelled'];
+      case 'Received': return ['Pending', 'Ordered'];
+      case 'Cancelled': return ['Pending', 'Ordered'];
+      default: return [];
     }
   };
 
@@ -734,8 +691,8 @@ const Suppliers = () => {
   };
 
   const getRatingStars = (rating) => {
-    const fullStars = Math.floor(rating);
-    const hasHalfStar = rating % 1 >= 0.5;
+    const fullStars = Math.floor(rating || 0);
+    const hasHalfStar = (rating || 0) % 1 >= 0.5;
     return (
       <div className="flex items-center gap-0.5">
         {[...Array(5)].map((_, i) => (
@@ -743,7 +700,7 @@ const Suppliers = () => {
             {i < fullStars ? '★' : (i === fullStars && hasHalfStar ? '★' : '☆')}
           </span>
         ))}
-        <span className="ml-1 text-gray-500 text-xs">({rating.toFixed(1)})</span>
+        <span className="ml-1 text-gray-500 text-xs">({(rating || 0).toFixed(1)})</span>
       </div>
     );
   };
@@ -759,7 +716,6 @@ const Suppliers = () => {
     return colors[index % colors.length];
   };
 
-  // Format date
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
@@ -772,7 +728,6 @@ const Suppliers = () => {
     });
   };
 
-  // Format currency
   const formatCurrency = (amount) => {
     if (amount === undefined || amount === null) return 'KES 0.00';
     return `KES ${amount.toFixed(2)}`;
@@ -793,7 +748,7 @@ const Suppliers = () => {
         </div>
       )}
 
-      {/* Header with Both Buttons */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Supplier Management</h2>
@@ -878,7 +833,7 @@ const Suppliers = () => {
         </div>
       </div>
 
-      {/* ============ ORDERS SECTION (TOP) ============ */}
+      {/* Orders Section */}
       <div className="mb-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
           <div>
@@ -890,7 +845,6 @@ const Suppliers = () => {
           </div>
         </div>
 
-        {/* Order Filters */}
         <div className="flex flex-wrap gap-4 mb-4">
           <div className="relative">
             <select
@@ -923,7 +877,6 @@ const Suppliers = () => {
           </button>
         </div>
 
-        {/* Order Table View with Changeable Status and Download */}
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1017,10 +970,7 @@ const Suppliers = () => {
                               <FileSpreadsheet className="w-4 h-4 text-green-500 hover:text-green-700" />
                             </button>
                             <button
-                              onClick={() => {
-                                setSelectedOrderForHistory(order);
-                                fetchOrderHistory(order.id);
-                              }}
+                              onClick={() => fetchOrderHistory(order.id)}
                               className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
                               title="View History"
                             >
@@ -1045,9 +995,8 @@ const Suppliers = () => {
         </div>
       </div>
 
-      {/* ============ SUPPLIERS SECTION (BOTTOM) ============ */}
+      {/* Suppliers Section */}
       <div className="border-t border-gray-200 pt-8">
-        {/* Supplier Header */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
           <div>
             <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
@@ -1058,7 +1007,6 @@ const Suppliers = () => {
           </div>
         </div>
 
-        {/* Supplier Search and Filters */}
         <div className="flex flex-col sm:flex-row gap-4 mb-4">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1100,7 +1048,6 @@ const Suppliers = () => {
               onClick={() => {
                 fetchProductNames();
                 fetchSuppliers();
-                fetchOrders();
               }}
               className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
               title="Refresh"
@@ -1110,7 +1057,6 @@ const Suppliers = () => {
           </div>
         </div>
 
-        {/* Supplier Table View */}
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1172,8 +1118,8 @@ const Suppliers = () => {
                           </div>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-gray-600">{supplier.total_products}</td>
-                      <td className="py-3 px-4 text-gray-600">{supplier.total_orders}</td>
+                      <td className="py-3 px-4 text-gray-600">{supplier.total_products || 0}</td>
+                      <td className="py-3 px-4 text-gray-600">{supplier.total_orders || 0}</td>
                       <td className="py-3 px-4 text-gray-600">KES {supplier.total_spent?.toFixed(0) || '0'}</td>
                       <td className="py-3 px-4 text-gray-600">{supplier.last_order_date ? new Date(supplier.last_order_date).toLocaleDateString() : 'N/A'}</td>
                       <td className="py-3 px-4">{getRatingStars(supplier.rating)}</td>
@@ -1208,9 +1154,7 @@ const Suppliers = () => {
         </div>
       </div>
 
-      {/* ============ MODALS ============ */}
-
-      {/* Add Supplier Modal - Updated: Removed item_type field */}
+      {/* Add Supplier Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -1220,7 +1164,6 @@ const Suppliers = () => {
                 <X className="w-6 h-6 text-gray-500" />
               </button>
             </div>
-
             <form onSubmit={handleAddSupplier} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1284,7 +1227,6 @@ const Suppliers = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                 <textarea value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="Additional notes about this supplier..." />
               </div>
-
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
                 <button type="button" onClick={() => setShowAddModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors">Cancel</button>
                 <button type="submit" className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
@@ -1297,7 +1239,7 @@ const Suppliers = () => {
         </div>
       )}
 
-      {/* Edit Supplier Modal - Updated: Removed item_type field */}
+      {/* Edit Supplier Modal */}
       {showEditModal && selectedSupplier && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -1370,7 +1312,6 @@ const Suppliers = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                 <textarea value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" />
               </div>
-
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
                 <button type="button" onClick={() => setShowEditModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors">Cancel</button>
                 <button type="submit" className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
@@ -1383,7 +1324,7 @@ const Suppliers = () => {
         </div>
       )}
 
-      {/* View Supplier Modal - Updated: Removed item_type display */}
+      {/* View Supplier Modal */}
       {showViewModal && selectedSupplier && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -1393,7 +1334,6 @@ const Suppliers = () => {
                 <X className="w-6 h-6 text-gray-500" />
               </button>
             </div>
-
             <div className="p-6 space-y-4">
               <div className="flex items-center gap-4 mb-4">
                 <div className={`w-16 h-16 rounded-lg bg-gradient-to-br ${getAvatarColor(selectedSupplier.name)} flex items-center justify-center text-white font-semibold text-2xl`}>
@@ -1409,46 +1349,17 @@ const Suppliers = () => {
                   </div>
                 </div>
               </div>
-
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-gray-500">Contact Person</p>
-                  <p className="font-medium text-gray-900">{selectedSupplier.contact_person}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Email</p>
-                  <p className="font-medium text-gray-900">{selectedSupplier.email}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Phone</p>
-                  <p className="font-medium text-gray-900">{selectedSupplier.phone}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Rating</p>
-                  <p className="font-medium text-gray-900">{getRatingStars(selectedSupplier.rating)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Total Products</p>
-                  <p className="font-medium text-gray-900">{selectedSupplier.total_products}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Total Orders</p>
-                  <p className="font-medium text-gray-900">{selectedSupplier.total_orders}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Total Spent</p>
-                  <p className="font-medium text-gray-900">KES {selectedSupplier.total_spent?.toFixed(0) || '0'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Last Order</p>
-                  <p className="font-medium text-gray-900">{selectedSupplier.last_order_date ? new Date(selectedSupplier.last_order_date).toLocaleDateString() : 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Joined</p>
-                  <p className="font-medium text-gray-900">{new Date(selectedSupplier.created_at).toLocaleDateString()}</p>
-                </div>
+                <div><p className="text-sm text-gray-500">Contact Person</p><p className="font-medium text-gray-900">{selectedSupplier.contact_person}</p></div>
+                <div><p className="text-sm text-gray-500">Email</p><p className="font-medium text-gray-900">{selectedSupplier.email}</p></div>
+                <div><p className="text-sm text-gray-500">Phone</p><p className="font-medium text-gray-900">{selectedSupplier.phone}</p></div>
+                <div><p className="text-sm text-gray-500">Rating</p><p className="font-medium text-gray-900">{getRatingStars(selectedSupplier.rating)}</p></div>
+                <div><p className="text-sm text-gray-500">Total Products</p><p className="font-medium text-gray-900">{selectedSupplier.total_products || 0}</p></div>
+                <div><p className="text-sm text-gray-500">Total Orders</p><p className="font-medium text-gray-900">{selectedSupplier.total_orders || 0}</p></div>
+                <div><p className="text-sm text-gray-500">Total Spent</p><p className="font-medium text-gray-900">KES {selectedSupplier.total_spent?.toFixed(0) || '0'}</p></div>
+                <div><p className="text-sm text-gray-500">Last Order</p><p className="font-medium text-gray-900">{selectedSupplier.last_order_date ? new Date(selectedSupplier.last_order_date).toLocaleDateString() : 'N/A'}</p></div>
+                <div><p className="text-sm text-gray-500">Joined</p><p className="font-medium text-gray-900">{selectedSupplier.created_at ? new Date(selectedSupplier.created_at).toLocaleDateString() : 'N/A'}</p></div>
               </div>
-
               {(selectedSupplier.address || selectedSupplier.city || selectedSupplier.country) && (
                 <div>
                   <p className="text-sm text-gray-500">Address</p>
@@ -1461,14 +1372,12 @@ const Suppliers = () => {
                   </p>
                 </div>
               )}
-
               {selectedSupplier.notes && (
                 <div>
                   <p className="text-sm text-gray-500">Notes</p>
                   <p className="text-gray-700">{selectedSupplier.notes}</p>
                 </div>
               )}
-
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
                 <button onClick={() => setShowViewModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors">Close</button>
                 <button onClick={() => { setShowViewModal(false); handleEdit(selectedSupplier); }} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
@@ -1481,7 +1390,7 @@ const Suppliers = () => {
         </div>
       )}
 
-      {/* Create Order Modal - Updated: Manual product entry, removed tax */}
+      {/* Create Order Modal */}
       {showOrderModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
@@ -1491,7 +1400,6 @@ const Suppliers = () => {
                 <X className="w-6 h-6 text-gray-500" />
               </button>
             </div>
-
             <form onSubmit={handleSubmitOrder} className="p-6">
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div>
@@ -1518,51 +1426,23 @@ const Suppliers = () => {
                 </div>
               </div>
 
-              {/* Manual Product Entry Section */}
               <div className="mb-6">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Add Products</label>
                 <div className="grid grid-cols-4 gap-2">
                   <div className="col-span-2">
-                    <input
-                      type="text"
-                      placeholder="Product name"
-                      value={productNameInput}
-                      onChange={(e) => setProductNameInput(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                    <input type="text" placeholder="Product name" value={productNameInput} onChange={(e) => setProductNameInput(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
                   <div>
-                    <input
-                      type="number"
-                      placeholder="Price"
-                      value={productPriceInput}
-                      onChange={(e) => setProductPriceInput(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      min="0"
-                      step="0.01"
-                    />
+                    <input type="number" placeholder="Price" value={productPriceInput} onChange={(e) => setProductPriceInput(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" min="0" step="0.01" />
                   </div>
                   <div className="flex gap-2">
-                    <input
-                      type="number"
-                      placeholder="Qty"
-                      value={productQuantityInput}
-                      onChange={(e) => setProductQuantityInput(parseInt(e.target.value) || 1)}
-                      className="w-16 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      min="1"
-                    />
-                    <button
-                      type="button"
-                      onClick={addProductToOrder}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
-                    >
+                    <input type="number" placeholder="Qty" value={productQuantityInput} onChange={(e) => setProductQuantityInput(parseInt(e.target.value) || 1)} className="w-16 px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" min="1" />
+                    <button type="button" onClick={addProductToOrder} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">
                       <PlusIcon className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
-                {error && (
-                  <p className="mt-2 text-sm text-red-600">{error}</p>
-                )}
+                {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
               </div>
 
               <div className="mb-6">
@@ -1589,14 +1469,7 @@ const Suppliers = () => {
                               <PlusIcon className="w-4 h-4 text-gray-600" />
                             </button>
                           </div>
-                          <input
-                            type="number"
-                            value={item.price}
-                            onChange={(e) => updateOrderItemPrice(item.id, parseFloat(e.target.value) || 0)}
-                            className="w-24 px-2 py-1 border border-gray-200 rounded text-right focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            min="0"
-                            step="0.01"
-                          />
+                          <input type="number" value={item.price} onChange={(e) => updateOrderItemPrice(item.id, parseFloat(e.target.value) || 0)} className="w-24 px-2 py-1 border border-gray-200 rounded text-right focus:outline-none focus:ring-2 focus:ring-blue-500" min="0" step="0.01" />
                           <span className="font-medium text-gray-900">KES {(item.price * item.quantity).toFixed(2)}</span>
                           <button type="button" onClick={() => removeItemFromOrder(item.id)} className="p-1 hover:bg-red-100 rounded-lg transition-colors">
                             <TrashIcon className="w-4 h-4 text-red-500" />
@@ -1655,7 +1528,6 @@ const Suppliers = () => {
                 <X className="w-6 h-6 text-gray-500" />
               </button>
             </div>
-
             <div className="p-6">
               {historyLoading ? (
                 <div className="text-center py-8">
@@ -1678,15 +1550,10 @@ const Suppliers = () => {
                           )}
                           <div className="relative flex items-start gap-3">
                             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 ring-8 ring-white">
-                              {history.new_status === 'Received' ? (
-                                <CheckCircle className="h-5 w-5 text-green-600" />
-                              ) : history.new_status === 'Cancelled' ? (
-                                <AlertCircle className="h-5 w-5 text-red-600" />
-                              ) : history.new_status === 'Ordered' ? (
-                                <Truck className="h-5 w-5 text-blue-600" />
-                              ) : (
-                                <Clock className="h-5 w-5 text-yellow-600" />
-                              )}
+                              {history.new_status === 'Received' ? <CheckCircle className="h-5 w-5 text-green-600" /> :
+                               history.new_status === 'Cancelled' ? <AlertCircle className="h-5 w-5 text-red-600" /> :
+                               history.new_status === 'Ordered' ? <Truck className="h-5 w-5 text-blue-600" /> :
+                               <Clock className="h-5 w-5 text-yellow-600" />}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex flex-wrap items-center gap-2">
@@ -1704,18 +1571,10 @@ const Suppliers = () => {
                                   </>
                                 )}
                               </div>
-                              {history.notes && (
-                                <p className="mt-1 text-sm text-gray-600">{history.notes}</p>
-                              )}
+                              {history.notes && <p className="mt-1 text-sm text-gray-600">{history.notes}</p>}
                               <div className="mt-1 flex items-center gap-3 text-xs text-gray-500">
-                                <span className="flex items-center gap-1">
-                                  <User className="w-3 h-3" />
-                                  {history.changed_by ? `User ${history.changed_by}` : 'System'}
-                                </span>
-                                <span className="flex items-center gap-1">
-                                  <Calendar className="w-3 h-3" />
-                                  {formatDate(history.created_at)}
-                                </span>
+                                <span className="flex items-center gap-1"><User className="w-3 h-3" />{history.changed_by ? `User ${history.changed_by}` : 'System'}</span>
+                                <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{formatDate(history.created_at)}</span>
                               </div>
                             </div>
                           </div>
@@ -1726,17 +1585,14 @@ const Suppliers = () => {
                 </div>
               )}
             </div>
-
             <div className="flex items-center justify-end p-6 border-t border-gray-200">
-              <button onClick={() => setShowHistoryModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors">
-                Close
-              </button>
+              <button onClick={() => setShowHistoryModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors">Close</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Order Detail View Modal with Download Buttons */}
+      {/* Order Detail View Modal */}
       {showOrderDetailModal && selectedOrder && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
@@ -1745,59 +1601,30 @@ const Suppliers = () => {
                 <FileText className="w-5 h-5 text-gray-600" />
                 Order Details - {selectedOrder.order_number}
               </h3>
-              <button onClick={() => {
-                setShowOrderDetailModal(false);
-                setSelectedOrder(null);
-              }} className="p-1 hover:bg-gray-100 rounded-lg transition-colors">
+              <button onClick={() => { setShowOrderDetailModal(false); setSelectedOrder(null); }} className="p-1 hover:bg-gray-100 rounded-lg transition-colors">
                 <X className="w-6 h-6 text-gray-500" />
               </button>
             </div>
-
             <div className="p-6">
-              {/* Order Summary - Removed tax row */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-xs text-gray-500">Supplier</p>
-                  <p className="font-medium text-gray-900">{selectedOrder.supplier_name || 'Unknown'}</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-xs text-gray-500">Order Date</p>
-                  <p className="font-medium text-gray-900">{formatDate(selectedOrder.order_date)}</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-xs text-gray-500">Status</p>
-                  <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${getOrderStatusColor(selectedOrder.status)}`}>
-                    {getOrderStatusIcon(selectedOrder.status)}
-                    {selectedOrder.status}
-                  </span>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-xs text-gray-500">Subtotal</p>
-                  <p className="font-medium text-gray-900">{formatCurrency(selectedOrder.subtotal)}</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <p className="text-xs text-gray-500">Discount</p>
-                  <p className="font-medium text-gray-900">{formatCurrency(selectedOrder.discount)}</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-4 col-span-2 md:col-span-3">
-                  <p className="text-xs text-gray-500">Total</p>
-                  <p className="text-xl font-bold text-blue-600">{formatCurrency(selectedOrder.total)}</p>
-                </div>
+                <div className="bg-gray-50 rounded-lg p-4"><p className="text-xs text-gray-500">Supplier</p><p className="font-medium text-gray-900">{selectedOrder.supplier_name || 'Unknown'}</p></div>
+                <div className="bg-gray-50 rounded-lg p-4"><p className="text-xs text-gray-500">Order Date</p><p className="font-medium text-gray-900">{formatDate(selectedOrder.order_date)}</p></div>
+                <div className="bg-gray-50 rounded-lg p-4"><p className="text-xs text-gray-500">Status</p><span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${getOrderStatusColor(selectedOrder.status)}`}>{getOrderStatusIcon(selectedOrder.status)}{selectedOrder.status}</span></div>
+                <div className="bg-gray-50 rounded-lg p-4"><p className="text-xs text-gray-500">Subtotal</p><p className="font-medium text-gray-900">{formatCurrency(selectedOrder.subtotal)}</p></div>
+                <div className="bg-gray-50 rounded-lg p-4"><p className="text-xs text-gray-500">Discount</p><p className="font-medium text-gray-900">{formatCurrency(selectedOrder.discount)}</p></div>
+                <div className="bg-gray-50 rounded-lg p-4 col-span-2 md:col-span-3"><p className="text-xs text-gray-500">Total</p><p className="text-xl font-bold text-blue-600">{formatCurrency(selectedOrder.total)}</p></div>
               </div>
 
-              {/* Order Items */}
               <div>
                 <h4 className="font-semibold text-gray-900 mb-3">Order Items</h4>
                 <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
                   <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="text-left py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Product</th>
-                        <th className="text-right py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Quantity</th>
-                        <th className="text-right py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Price</th>
-                        <th className="text-right py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Total</th>
-                      </tr>
-                    </thead>
+                    <thead><tr className="bg-gray-50 border-b border-gray-200">
+                      <th className="text-left py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Product</th>
+                      <th className="text-right py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Quantity</th>
+                      <th className="text-right py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Price</th>
+                      <th className="text-right py-2.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Total</th>
+                    </tr></thead>
                     <tbody>
                       {selectedOrder.items && selectedOrder.items.length > 0 ? (
                         selectedOrder.items.map((item, idx) => (
@@ -1809,27 +1636,13 @@ const Suppliers = () => {
                           </tr>
                         ))
                       ) : (
-                        <tr>
-                          <td colSpan="4" className="text-center py-8 text-gray-500">No items in this order</td>
-                        </tr>
+                        <tr><td colSpan="4" className="text-center py-8 text-gray-500">No items in this order</td></tr>
                       )}
                     </tbody>
                     <tfoot>
-                      <tr className="bg-gray-50 border-t border-gray-200">
-                        <td colSpan="2" className="py-3 px-4"></td>
-                        <td className="py-3 px-4 text-right font-medium text-gray-700">Subtotal:</td>
-                        <td className="py-3 px-4 text-right font-medium text-gray-900">{formatCurrency(selectedOrder.subtotal)}</td>
-                      </tr>
-                      <tr className="bg-gray-50">
-                        <td colSpan="2" className="py-2 px-4"></td>
-                        <td className="py-2 px-4 text-right font-medium text-gray-700">Discount:</td>
-                        <td className="py-2 px-4 text-right font-medium text-gray-900">-{formatCurrency(selectedOrder.discount)}</td>
-                      </tr>
-                      <tr className="bg-blue-50">
-                        <td colSpan="2" className="py-3 px-4"></td>
-                        <td className="py-3 px-4 text-right font-bold text-blue-700">Total:</td>
-                        <td className="py-3 px-4 text-right font-bold text-blue-700">{formatCurrency(selectedOrder.total)}</td>
-                      </tr>
+                      <tr className="bg-gray-50 border-t border-gray-200"><td colSpan="2" className="py-3 px-4"></td><td className="py-3 px-4 text-right font-medium text-gray-700">Subtotal:</td><td className="py-3 px-4 text-right font-medium text-gray-900">{formatCurrency(selectedOrder.subtotal)}</td></tr>
+                      <tr className="bg-gray-50"><td colSpan="2" className="py-2 px-4"></td><td className="py-2 px-4 text-right font-medium text-gray-700">Discount:</td><td className="py-2 px-4 text-right font-medium text-gray-900">-{formatCurrency(selectedOrder.discount)}</td></tr>
+                      <tr className="bg-blue-50"><td colSpan="2" className="py-3 px-4"></td><td className="py-3 px-4 text-right font-bold text-blue-700">Total:</td><td className="py-3 px-4 text-right font-bold text-blue-700">{formatCurrency(selectedOrder.total)}</td></tr>
                     </tfoot>
                   </table>
                 </div>
@@ -1842,25 +1655,12 @@ const Suppliers = () => {
                 </div>
               )}
 
-              {/* Status Change Actions */}
               {getAvailableStatusTransitions(selectedOrder.status).length > 0 && (
                 <div className="mt-6 pt-6 border-t border-gray-200">
                   <p className="text-sm font-medium text-gray-700 mb-3">Update Order Status:</p>
                   <div className="flex flex-wrap gap-2">
                     {getAvailableStatusTransitions(selectedOrder.status).map((status) => (
-                      <button
-                        key={status}
-                        onClick={() => {
-                          handleUpdateOrderStatus(selectedOrder.id, status);
-                          setShowOrderDetailModal(false);
-                          setSelectedOrder(null);
-                        }}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${status === 'Ordered' ? 'bg-blue-600 hover:bg-blue-700 text-white' :
-                            status === 'Received' ? 'bg-green-600 hover:bg-green-700 text-white' :
-                              status === 'Cancelled' ? 'bg-red-600 hover:bg-red-700 text-white' :
-                                'bg-gray-600 hover:bg-gray-700 text-white'
-                          }`}
-                      >
+                      <button key={status} onClick={() => { handleUpdateOrderStatus(selectedOrder.id, status); setShowOrderDetailModal(false); setSelectedOrder(null); }} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${status === 'Ordered' ? 'bg-blue-600 hover:bg-blue-700 text-white' : status === 'Received' ? 'bg-green-600 hover:bg-green-700 text-white' : status === 'Cancelled' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-600 hover:bg-gray-700 text-white'}`}>
                         {status === 'Ordered' && <Truck className="w-4 h-4" />}
                         {status === 'Received' && <CheckCircle className="w-4 h-4" />}
                         {status === 'Cancelled' && <AlertCircle className="w-4 h-4" />}
@@ -1871,49 +1671,20 @@ const Suppliers = () => {
                 </div>
               )}
 
-              {/* Footer with Download Buttons */}
               <div className="flex items-center justify-between mt-6 pt-6 border-t border-gray-200">
                 <div className="flex gap-2">
-                  {/* PDF Download Button */}
-                  <button
-                    onClick={() => downloadOrderPDF(selectedOrder.id)}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
-                  >
-                    <FileText className="w-4 h-4" />
-                    Export PDF
+                  <button onClick={() => downloadOrderPDF(selectedOrder.id)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors">
+                    <FileText className="w-4 h-4" /> Export PDF
                   </button>
-                  
-                  {/* Excel Download Button */}
-                  <button
-                    onClick={() => downloadOrderExcel(selectedOrder.id)}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
-                  >
-                    <FileSpreadsheet className="w-4 h-4" />
-                    Export Excel
+                  <button onClick={() => downloadOrderExcel(selectedOrder.id)} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors">
+                    <FileSpreadsheet className="w-4 h-4" /> Export Excel
                   </button>
                 </div>
-                
                 <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => {
-                      setSelectedOrderForHistory(selectedOrder);
-                      setShowOrderDetailModal(false);
-                      fetchOrderHistory(selectedOrder.id);
-                    }}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors"
-                  >
-                    <History className="w-4 h-4" />
-                    View History
+                  <button onClick={() => { setSelectedOrderForHistory(selectedOrder); setShowOrderDetailModal(false); fetchOrderHistory(selectedOrder.id); }} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors">
+                    <History className="w-4 h-4" /> View History
                   </button>
-                  <button
-                    onClick={() => {
-                      setShowOrderDetailModal(false);
-                      setSelectedOrder(null);
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors"
-                  >
-                    Close
-                  </button>
+                  <button onClick={() => { setShowOrderDetailModal(false); setSelectedOrder(null); }} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors">Close</button>
                 </div>
               </div>
             </div>

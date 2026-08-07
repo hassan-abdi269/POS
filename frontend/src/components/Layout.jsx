@@ -21,47 +21,52 @@ import {
   ChevronDown,
   Search
 } from 'lucide-react';
+import { authService } from '../service/api';
 
 const Layout = () => {
   const navigate = useNavigate();
   const [shop, setShop] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check if shop is logged in
-    const shopData = localStorage.getItem('shop');
-    const shopToken = localStorage.getItem('shopToken');
+    // ✅ Use authService to get user consistently
+    const user = authService.getCurrentUser();
     
-    if (!shopToken || !shopData) {
-      navigate('/login');
+    console.log('🔍 Layout check - User:', user);
+    
+    if (!user) {
+      console.log('❌ No user found in Layout - redirecting to login');
+      navigate('/login', { replace: true });
       return;
     }
     
-    try {
-      setShop(JSON.parse(shopData));
-    } catch (error) {
-      console.error('Error parsing shop data:', error);
-      navigate('/login');
+    // Check if user is shop admin (not super admin)
+    if (user.is_admin === true) {
+      console.log('🔄 Super admin in shop layout - redirecting');
+      navigate('/superadmin/dashboard', { replace: true });
+      return;
     }
+    
+    // Set shop data from user
+    setShop({
+      ...user,
+      name: user.name || user.shopName || 'Shop',
+      owner: user.owner || user.username || 'Shop Owner'
+    });
+    setIsLoading(false);
+    
   }, [navigate]);
 
   const handleLogout = async () => {
     try {
-      await fetch('http://localhost:5000/api/shop/logout', {
-        method: 'POST',
-        credentials: 'include'
-      });
+      await authService.logout();
     } catch (error) {
       console.error('Logout error:', error);
     }
     
-    localStorage.removeItem('shop');
-    localStorage.removeItem('shopToken');
-    localStorage.removeItem('userRole');
-    localStorage.removeItem('shopId');
-    localStorage.removeItem('isAuthenticated');
-    navigate('/login');
+    navigate('/login', { replace: true });
   };
 
   const navItems = [
@@ -87,12 +92,19 @@ const Layout = () => {
     return name.substring(0, 2).toUpperCase();
   };
 
-  if (!shop) {
+  if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
       </div>
     );
+  }
+
+  if (!shop) {
+    return null;
   }
 
   return (

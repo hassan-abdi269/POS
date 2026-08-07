@@ -1,3 +1,5 @@
+// src/pages/Settings.jsx
+
 import React, { useState, useEffect } from 'react';
 import { 
   Save,
@@ -23,6 +25,8 @@ import {
   DollarSign,
   RefreshCw
 } from 'lucide-react';
+import { settingsService, authService } from '../service/api';
+import { api } from '../service/api';
 
 const Settings = () => {
   const [activeTab, setActiveTab] = useState('general');
@@ -72,29 +76,47 @@ const Settings = () => {
     sessionTimeout: '30'
   });
 
-  const [securityData, setSecurityData] = useState({
-    two_factor_auth: false,
-    session_timeout: 30
-  });
+  // Get current shop ID
+  const getShopId = () => {
+    const user = authService.getCurrentUser();
+    return user?.shopId;
+  };
 
   // Fetch settings on load
   useEffect(() => {
-    fetchSettings();
-    fetchNotificationPreferences();
-    fetchSecuritySettings();
-    fetchAppearanceSettings();
-    fetchRegionalSettings();
+    fetchAllSettings();
   }, []);
 
-  // Fetch general settings
-  const fetchSettings = async () => {
+  // Fetch all settings
+  const fetchAllSettings = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:5000/api/settings?category=general', {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      // Fetch all settings in parallel
+      await Promise.all([
+        fetchGeneralSettings(shopId),
+        fetchNotificationPreferences(shopId),
+        fetchSecuritySettings(shopId)
+      ]);
+    } catch (error) {
+      console.error('Error fetching settings:', error);
+      setError('Failed to load settings. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch general settings
+  const fetchGeneralSettings = async (shopId) => {
+    try {
+      const data = await settingsService.getSettings(shopId);
+      
+      if (Array.isArray(data)) {
         const settingsMap = {};
         data.forEach(item => {
           settingsMap[item.key] = item.value;
@@ -115,25 +137,26 @@ const Settings = () => {
         }));
       }
     } catch (error) {
-      console.error('Error fetching settings:', error);
-    } finally {
-      setLoading(false);
+      console.error('Error fetching general settings:', error);
     }
   };
 
   // Fetch notification preferences
-  const fetchNotificationPreferences = async () => {
+  const fetchNotificationPreferences = async (shopId) => {
     try {
-      const response = await fetch('http://localhost:5000/api/notifications/preferences', {
-        credentials: 'include'
+      const response = await api.get('/notifications/preferences', {
+        params: { shop_id: shopId }
       });
-      if (response.ok) {
-        const data = await response.json();
+      
+      if (response.data && Array.isArray(response.data)) {
         const prefs = {};
-        data.forEach(item => {
+        response.data.forEach(item => {
           prefs[item.type] = item.enabled;
         });
-        setNotifications(prefs);
+        setNotifications(prev => ({
+          ...prev,
+          ...prefs
+        }));
       }
     } catch (error) {
       console.error('Error fetching notification preferences:', error);
@@ -141,71 +164,21 @@ const Settings = () => {
   };
 
   // Fetch security settings
-  const fetchSecuritySettings = async () => {
+  const fetchSecuritySettings = async (shopId) => {
     try {
-      const response = await fetch('http://localhost:5000/api/security/settings', {
-        credentials: 'include'
+      const response = await api.get('/security/settings', {
+        params: { shop_id: shopId }
       });
-      if (response.ok) {
-        const data = await response.json();
-        setSecurityData(data);
+      
+      if (response.data) {
         setSecuritySettings(prev => ({
           ...prev,
-          twoFactorAuth: data.two_factor_auth,
-          sessionTimeout: String(data.session_timeout)
+          twoFactorAuth: response.data.two_factor_auth || false,
+          sessionTimeout: String(response.data.session_timeout || '30')
         }));
       }
     } catch (error) {
       console.error('Error fetching security settings:', error);
-    }
-  };
-
-  // Fetch appearance settings
-  const fetchAppearanceSettings = async () => {
-    try {
-      const response = await fetch('http://localhost:5000/api/settings?category=appearance', {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const settingsMap = {};
-        data.forEach(item => {
-          settingsMap[item.key] = item.value;
-        });
-        
-        setAppearanceSettings({
-          theme: settingsMap.theme || 'light',
-          accent_color: settingsMap.accent_color || 'gray-900',
-          font_size: settingsMap.font_size || 'medium'
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching appearance settings:', error);
-    }
-  };
-
-  // Fetch regional settings
-  const fetchRegionalSettings = async () => {
-    try {
-      const response = await fetch('http://localhost:5000/api/settings?category=regional', {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const settingsMap = {};
-        data.forEach(item => {
-          settingsMap[item.key] = item.value;
-        });
-        
-        setRegionalSettings({
-          currency: settingsMap.currency || 'KES',
-          date_format: settingsMap.date_format || 'DD/MM/YYYY',
-          time_format: settingsMap.time_format || '12h',
-          language: settingsMap.language || 'en'
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching regional settings:', error);
     }
   };
 
@@ -216,32 +189,29 @@ const Settings = () => {
       setError('');
       setSuccess('');
       
-      const settings = Object.entries(generalSettings).map(([key, value]) => ({
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      // Convert settings to array format for batch update
+      const settingsArray = Object.entries(generalSettings).map(([key, value]) => ({
         key,
-        value,
+        value: String(value),
         category: 'general'
       }));
-      
-      const response = await fetch('http://localhost:5000/api/settings/batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ settings })
+
+      await api.post('/settings/batch', {
+        settings: settingsArray,
+        shop_id: shopId
       });
       
-      if (response.ok) {
-        setSuccess('General settings saved successfully!');
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to save settings');
-        setTimeout(() => setError(''), 5000);
-      }
+      setSuccess('General settings saved successfully!');
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error saving settings:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to save settings');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);
@@ -255,32 +225,28 @@ const Settings = () => {
       setError('');
       setSuccess('');
       
-      const settings = Object.entries(appearanceSettings).map(([key, value]) => ({
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      const settingsArray = Object.entries(appearanceSettings).map(([key, value]) => ({
         key,
-        value,
+        value: String(value),
         category: 'appearance'
       }));
-      
-      const response = await fetch('http://localhost:5000/api/settings/batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ settings })
+
+      await api.post('/settings/batch', {
+        settings: settingsArray,
+        shop_id: shopId
       });
       
-      if (response.ok) {
-        setSuccess('Appearance settings saved successfully!');
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to save settings');
-        setTimeout(() => setError(''), 5000);
-      }
+      setSuccess('Appearance settings saved successfully!');
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error saving appearance settings:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to save settings');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);
@@ -294,32 +260,28 @@ const Settings = () => {
       setError('');
       setSuccess('');
       
-      const settings = Object.entries(regionalSettings).map(([key, value]) => ({
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      const settingsArray = Object.entries(regionalSettings).map(([key, value]) => ({
         key,
-        value,
+        value: String(value),
         category: 'regional'
       }));
-      
-      const response = await fetch('http://localhost:5000/api/settings/batch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ settings })
+
+      await api.post('/settings/batch', {
+        settings: settingsArray,
+        shop_id: shopId
       });
       
-      if (response.ok) {
-        setSuccess('Regional settings saved successfully!');
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to save settings');
-        setTimeout(() => setError(''), 5000);
-      }
+      setSuccess('Regional settings saved successfully!');
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error saving regional settings:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to save settings');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);
@@ -333,31 +295,27 @@ const Settings = () => {
       setError('');
       setSuccess('');
       
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
       const preferences = Object.entries(notifications).map(([type, enabled]) => ({
         type,
         enabled
       }));
-      
-      const response = await fetch('http://localhost:5000/api/notifications/preferences', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ preferences })
+
+      await api.post('/notifications/preferences', {
+        preferences,
+        shop_id: shopId
       });
       
-      if (response.ok) {
-        setSuccess('Notification preferences saved successfully!');
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to save preferences');
-        setTimeout(() => setError(''), 5000);
-      }
+      setSuccess('Notification preferences saved successfully!');
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error saving preferences:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to save preferences');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);
@@ -371,29 +329,23 @@ const Settings = () => {
       setError('');
       setSuccess('');
       
-      const response = await fetch('http://localhost:5000/api/security/settings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          two_factor_auth: securitySettings.twoFactorAuth,
-          session_timeout: parseInt(securitySettings.sessionTimeout)
-        })
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      await api.post('/security/settings', {
+        two_factor_auth: securitySettings.twoFactorAuth,
+        session_timeout: parseInt(securitySettings.sessionTimeout),
+        shop_id: shopId
       });
       
-      if (response.ok) {
-        setSuccess('Security settings saved successfully!');
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to save security settings');
-        setTimeout(() => setError(''), 5000);
-      }
+      setSuccess('Security settings saved successfully!');
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error saving security settings:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to save security settings');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);
@@ -419,35 +371,29 @@ const Settings = () => {
         return;
       }
       
-      const response = await fetch('http://localhost:5000/api/security/change-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({
-          current_password: securitySettings.currentPassword,
-          new_password: securitySettings.newPassword
-        })
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        return;
+      }
+
+      await api.post('/security/change-password', {
+        current_password: securitySettings.currentPassword,
+        new_password: securitySettings.newPassword,
+        shop_id: shopId
       });
       
-      if (response.ok) {
-        setSuccess('Password changed successfully!');
-        setSecuritySettings(prev => ({
-          ...prev,
-          currentPassword: '',
-          newPassword: '',
-          confirmPassword: ''
-        }));
-        setTimeout(() => setSuccess(''), 5000);
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to change password');
-        setTimeout(() => setError(''), 5000);
-      }
+      setSuccess('Password changed successfully!');
+      setSecuritySettings(prev => ({
+        ...prev,
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: ''
+      }));
+      setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
       console.error('Error changing password:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to change password');
       setTimeout(() => setError(''), 5000);
     } finally {
       setLoading(false);

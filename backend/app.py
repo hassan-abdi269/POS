@@ -1,207 +1,518 @@
-# app.py - MUST BE AT THE VERY TOP
 import os
+
 from dotenv import load_dotenv
 
-# Load .env FIRST - before ANY other imports
+# Load .env at the VERY TOP with override
 load_dotenv(override=True)
 
-# Now import everything else
-from flask import Flask, jsonify, send_from_directory
+
+from flask import (
+    Flask,
+    jsonify,
+    send_from_directory,
+    session,
+    request
+)
+
 from flask_cors import CORS
+
 from flask_session import Session
-from flask_login import LoginManager, login_required, login_user, logout_user, current_user
-from extensions import db, migrate, cors, session as session_ext, login_manager, bcrypt
+
+from flask_login import (
+    login_required,
+    current_user
+)
+
+from sqlalchemy import text
+
+
+from extensions import (
+    db,
+    migrate,
+    login_manager,
+    bcrypt
+)
+
+
 from config import config
+
+
 from routes import init_routes
 
-# Import Shop model for user_loader
+
+from routes.auth import AdminUser
+
+
 from models.shop import Shop
 
-# ============ APPLICATION FACTORY ============
 
-def create_app(config_name='development'):
-    """Create and configure the Flask application"""
+
+# ==================================================
+# APPLICATION FACTORY
+# ==================================================
+
+def create_app(config_name="development"):
+
+
     app = Flask(__name__)
+
+
+
+    app.config.from_object(
+        config[config_name]
+    )
+
+
+
+    # ==============================================
+    # SESSION SETTINGS - FIXED
+    # ==============================================
+
+    app.config["SESSION_TYPE"] = "filesystem"
+    app.config["SESSION_PERMANENT"] = True
+    app.config["SESSION_USE_SIGNER"] = True
+    app.config["SESSION_KEY_PREFIX"] = "tirsi_"
     
-    # Load configuration
-    app.config.from_object(config[config_name])
+    # Use the config value directly (it's already a timedelta)
+    app.config["PERMANENT_SESSION_LIFETIME"] = app.config["PERMANENT_SESSION_LIFETIME"]
+
+    # CRITICAL: Cookie settings for cross-origin
+    app.config["SESSION_COOKIE_NAME"] = "session"
+    app.config["SESSION_COOKIE_DOMAIN"] = None  # Allow all domains
+    app.config["SESSION_COOKIE_PATH"] = "/"
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     
-    # Initialize extensions
+    # Refresh session on each request
+    app.config["SESSION_REFRESH_EACH_REQUEST"] = True
+
+
+
+    # ==============================================
+    # EXTENSIONS
+    # ==============================================
+
     initialize_extensions(app)
-    
-    # Setup login manager
+
+
+
     setup_login_manager(app)
-    
-    # Register blueprints/routes
+
+
+
+    # Register all routes
     init_routes(app)
-    
-    # Register error handlers
+
+
+
+    register_core_routes(app)
+
+
+
     register_error_handlers(app)
-    
+
+
+
     return app
 
 
-# ============ EXTENSIONS SETUP ============
+
+
+
+# ==================================================
+# EXTENSION INITIALIZATION - FIXED
+# ==================================================
 
 def initialize_extensions(app):
-    """Initialize all Flask extensions"""
+
+
     db.init_app(app)
-    migrate.init_app(app, db)
-    cors.init_app(app, 
-         supports_credentials=True,
-         origins=app.config['CORS_ORIGINS'].split(','))
-    session_ext.init_app(app)
-    login_manager.init_app(app)
-    bcrypt.init_app(app)
-    
-    # Test database connection
+
+
+    migrate.init_app(
+        app,
+        db
+    )
+
+
+    # FIXED: CORS with proper credentials
+    CORS(
+        app,
+
+        origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174"
+        ],
+
+        supports_credentials=True,  # CRITICAL
+
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Shop-ID",
+            "X-Requested-With",
+            "Accept",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Cookie"  # ADD THIS
+        ],
+
+        methods=[
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "OPTIONS"
+        ],
+        
+        expose_headers=[
+            "Content-Type",
+            "X-Requested-With",
+            "Set-Cookie"  # ADD THIS
+        ],
+        
+        max_age=86400
+    )
+
+
+
+    Session(app)
+
+
+
+    login_manager.init_app(
+        app
+    )
+
+
+    bcrypt.init_app(
+        app
+    )
+
+
+
     with app.app_context():
+
         try:
-            db.engine.connect()
-            print("✅ MySQL database connected successfully!")
+
+            db.session.execute(
+                text("SELECT 1")
+            )
+
+            print(
+                "✅ MySQL database connected"
+            )
+
+
         except Exception as e:
-            print(f"❌ MySQL connection failed: {e}")
+
+            print(
+                f"❌ Database connection failed: {e}"
+            )
 
 
-# ============ LOGIN MANAGER SETUP ============
 
-class AdminUser:
-    """Simple admin user class (no database)"""
-    def __init__(self, email):
-        self.id = 1
-        self.is_authenticated = True
-        self.is_active = True
-        self.is_anonymous = False
-        self.username = "admin"
-        self.email = email
-    
-    def get_id(self):
-        return str(self.id)
 
+
+# ==================================================
+# FLASK LOGIN SETUP
+# ==================================================
 
 def setup_login_manager(app):
-    """Configure Flask-Login - supports both Admin and Shop users"""
-    login_manager.login_view = None
+
+
     login_manager.session_protection = "strong"
-    
+
+
+
     @login_manager.user_loader
     def load_user(user_id):
-        """Load user by ID - supports both Admin (ID=1) and Shop users"""
-        # Check if it's admin (user_id == "1")
-        if user_id == "1":
-            return AdminUser(app.config.get('ADMIN_EMAIL', 'superadmin@system.com'))
-        
-        # Check if it's a shop
+
+
         try:
+
+
+            # ADMIN USER
+            if user_id == "1":
+
+                return AdminUser(
+                    app.config["ADMIN_EMAIL"]
+                )
+
+
+
+            # SHOP USER
+
             shop_id = int(user_id)
-            shop = Shop.query.get(shop_id)
+
+
+            shop = Shop.query.get(
+                shop_id
+            )
+
+
             if shop:
-                # Shop model has UserMixin with get_id() method
+
                 return shop
-        except (ValueError, TypeError):
-            pass
+
+
+
         except Exception as e:
-            app.logger.error(f"Error loading user {user_id}: {str(e)}")
-        
+
+
+            app.logger.error(
+                f"User loading error: {e}"
+            )
+
+
+
         return None
 
 
-# ============ ERROR HANDLERS ============
+    # Unauthorized handler
+    @login_manager.unauthorized_handler
+    def unauthorized_handler():
+        return jsonify({"error": "Unauthorized"}), 401
+
+
+
+
+
+# ==================================================
+# CORE ROUTES
+# ==================================================
+
+def register_core_routes(app):
+
+
+    @app.route("/health")
+    def health():
+
+
+        try:
+
+            db.session.execute(
+                text("SELECT 1")
+            )
+
+            database = "connected"
+
+
+        except Exception as e:
+
+            database = str(e)
+
+
+
+        return jsonify({
+
+            "status": "healthy",
+
+            "database": database,
+
+            "environment":
+                app.config["ENV"],
+
+            "admin":
+                app.config["ADMIN_EMAIL"]
+
+        })
+
+
+
+
+
+    @app.route("/")
+    def index():
+
+
+        return jsonify({
+
+            "name":
+                app.config["APP_NAME"],
+
+            "status":
+                "running",
+
+            "version":
+                "1.0.0"
+
+        })
+
+
+
+
+
+    @app.route("/uploads/<filename>")
+    def uploads(filename):
+
+
+        upload_folder = os.path.join(
+            app.root_path,
+            "uploads"
+        )
+
+
+        return send_from_directory(
+            upload_folder,
+            filename
+        )
+
+
+
+
+
+    # ======================
+    # SESSION CHECK
+    # ======================
+
+    @app.route(
+        "/api/auth/session-check",
+        methods=["GET"]
+    )
+    def session_check():
+
+        app.logger.debug(f"Session check - Authenticated: {current_user.is_authenticated}")
+        app.logger.debug(f"Session data: {dict(session) if session else 'No session'}")
+        app.logger.debug(f"Cookies: {request.cookies.to_dict()}")
+        
+        if current_user.is_authenticated:
+
+            user_data = {
+                "id": current_user.get_id(),
+                "email": getattr(current_user, "email", None),
+                "username": getattr(current_user, "username", None),
+                "is_admin": getattr(current_user, "is_admin", False)
+            }
+            
+            app.logger.debug(f"User data: {user_data}")
+
+            return jsonify({
+
+                "authenticated": True,
+
+                "user": user_data
+
+            }), 200
+
+
+
+        return jsonify({
+
+            "authenticated": False
+
+        }), 401
+
+
+
+
+
+    @app.route(
+        "/api/test-auth"
+    )
+    @login_required
+    def test_auth():
+
+
+        return jsonify({
+
+            "authenticated":
+                current_user.is_authenticated,
+
+            "id":
+                current_user.get_id(),
+
+            "is_admin":
+                getattr(
+                    current_user,
+                    "is_admin",
+                    False
+                )
+
+        })
+
+
+
+
+
+# ==================================================
+# ERROR HANDLERS
+# ==================================================
 
 def register_error_handlers(app):
-    """Register custom error handlers"""
-    
+
+
     @app.errorhandler(401)
     def unauthorized(error):
-        return jsonify({'error': 'Unauthorized - Please log in'}), 401
-    
+
+        return jsonify({
+
+            "error":
+                "Unauthorized"
+
+        }), 401
+
+
+
+
+
     @app.errorhandler(404)
     def not_found(error):
-        return jsonify({'error': 'Resource not found'}), 404
-    
+
+        return jsonify({
+
+            "error":
+                "Not found"
+
+        }), 404
+
+
+
+
+
     @app.errorhandler(500)
-    def internal_error(error):
-        return jsonify({'error': 'Internal server error'}), 500
+    def server_error(error):
 
-
-# ============ ROUTES ============
-
-def register_routes(app):
-    """Register application routes"""
-    
-    @app.route('/health', methods=['GET'])
-    def health_check():
-        """Health check endpoint"""
-        try:
-            db.session.execute("SELECT 1")
-            db_status = "connected"
-        except Exception as e:
-            db_status = f"disconnected: {str(e)}"
-        
         return jsonify({
-            'status': 'healthy',
-            'environment': app.config['ENV'],
-            'admin_email': app.config['ADMIN_EMAIL'],
-            'database': db_status
-        })
-    
-    @app.route('/', methods=['GET'])
-    def index():
-        """Root endpoint"""
-        return jsonify({
-            'name': app.config['APP_NAME'],
-            'version': '1.0.0',
-            'status': 'running',
-            'environment': app.config['ENV'],
-            'endpoints': {
-                'auth': '/api/auth/',
-                'shop': '/api/shop/',
-                'health': '/health'
-            }
-        })
-    
-    @app.route('/uploads/<filename>')
-    def uploaded_file(filename):
-        """Serve uploaded files"""
-        upload_dir = os.path.join(app.root_path, 'uploads')
-        return send_from_directory(upload_dir, filename)
-    
-    # Debug endpoint to check current user
-    @app.route('/api/debug/user', methods=['GET'])
-    @login_required
-    def debug_user():
-        """Debug endpoint to check current user"""
-        user_info = {
-            'is_authenticated': current_user.is_authenticated,
-            'user_id': current_user.get_id() if hasattr(current_user, 'get_id') else None,
-            'user_type': 'admin' if hasattr(current_user, 'username') and current_user.username == 'admin' else 'shop',
-        }
-        
-        if hasattr(current_user, 'name'):
-            user_info['name'] = current_user.name
-        if hasattr(current_user, 'email'):
-            user_info['email'] = current_user.email
-        if hasattr(current_user, 'shop_id'):
-            user_info['shop_id'] = current_user.shop_id
-        
-        return jsonify(user_info), 200
+
+            "error":
+                "Server error"
+
+        }), 500
 
 
-# ============ CREATE APP INSTANCE ============
-
-# Create app instance
-app = create_app(os.getenv('ENV', 'development'))
-
-# Register additional routes
-register_routes(app)
 
 
-# ============ RUN APPLICATION ============
 
-if __name__ == '__main__':
+# ==================================================
+# START APPLICATION
+# ==================================================
+
+app = create_app(
+    os.getenv(
+        "ENV",
+        "development"
+    )
+)
+
+
+
+if __name__ == "__main__":
+
+
     app.run(
-        debug=app.config['DEBUG'],
-        host='0.0.0.0',
+
+        host="0.0.0.0",
+
         port=5000,
-        threaded=True
+
+        debug=app.config["DEBUG"]
+
     )

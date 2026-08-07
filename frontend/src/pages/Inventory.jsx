@@ -1,3 +1,5 @@
+// src/pages/Inventory.jsx
+
 import React, { useState, useEffect } from 'react';
 import { 
   Search, 
@@ -19,6 +21,7 @@ import {
   LayoutGrid,
   List
 } from 'lucide-react';
+import { inventoryService, authService, uploadService } from '../service/api';
 
 const Inventory = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -44,20 +47,38 @@ const Inventory = () => {
     image_url: ''
   });
 
+  // Get current shop ID from auth
+  const getShopId = () => {
+    const user = authService.getCurrentUser();
+    return user?.shopId;
+  };
+
   // Fetch products from API
   const fetchProducts = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:5000/api/products', {
-        credentials: 'include'
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setInventoryData(data);
+      setError('');
+      
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
+        setLoading(false);
+        return;
       }
+
+      const data = await inventoryService.getAllProducts(shopId);
+      setInventoryData(data || []);
+      
+      // Reset quantities for all products
+      const initialQuantities = {};
+      (data || []).forEach(item => {
+        initialQuantities[item.id] = 0;
+      });
+      setQuantities(initialQuantities);
+      
     } catch (error) {
       console.error('Error fetching products:', error);
-      setError('Failed to load products.');
+      setError(error.response?.data?.error || 'Failed to load products.');
     } finally {
       setLoading(false);
     }
@@ -70,83 +91,78 @@ const Inventory = () => {
   // Handle stock update with automatic subtraction and status change
   const updateProductStock = async (productId, change) => {
     try {
-      const response = await fetch(`http://localhost:5000/api/products/${productId}/stock`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify({ quantity: change }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        
-        // Update the product in the local state
-        setInventoryData(prev => 
-          prev.map(p => p.id === productId ? data.product : p)
-        );
-        
-        // Get the product name for messages
-        const product = inventoryData.find(p => p.id === productId);
-        const productName = product ? product.name : 'Product';
-        
-        // Create status-specific messages
-        let statusMessage = '';
-        
-        if (data.product.status === 'In Stock') {
-          statusMessage = `✅ ${productName}: Stock is healthy (${data.product.stock} units available - Limit: ${data.product.stock_limit})`;
-        } else if (data.product.status === 'Low Stock') {
-          statusMessage = `⚠️ ${productName}: Running low on stock (${data.product.stock} units remaining - Limit: ${data.product.stock_limit})`;
-        } else if (data.product.status === 'Out of Stock') {
-          statusMessage = `🚨 ${productName}: OUT OF STOCK! (0 units available)`;
-        }
-        
-        // Show alert only on status change or specific thresholds
-        if (data.alerts && data.alerts.length > 0) {
-          // Use the server alerts with colors
-          data.alerts.forEach(alert => {
-            let colorInfo = {};
-            if (alert.includes('OUT OF STOCK')) {
-              colorInfo = { bg: 'bg-red-50', border: 'border-red-500', icon: 'text-red-500', type: 'danger' };
-            } else if (alert.includes('running low')) {
-              colorInfo = { bg: 'bg-blue-50', border: 'border-blue-500', icon: 'text-blue-500', type: 'warning' };
-            } else {
-              colorInfo = { bg: 'bg-green-50', border: 'border-green-500', icon: 'text-green-500', type: 'success' };
-            }
-            setAlerts(prev => [...prev, { 
-              message: alert, 
-              type: colorInfo.type,
-              bgColor: colorInfo.bg,
-              borderColor: colorInfo.border,
-              iconColor: colorInfo.icon
-            }]);
-          });
-          // Auto-dismiss alerts after 30 minutes
-          setTimeout(() => {
-            setAlerts(prev => prev.filter(a => !data.alerts.includes(a.message)));
-          }, 1800000);
-        } else {
-          // Show status message with appropriate color
-          setSuccess(statusMessage);
-          // Auto-dismiss success message after 30 minutes
-          setTimeout(() => {
-            setSuccess('');
-          }, 1800000);
-        }
-        
-        // Reset quantity display for this product
-        setQuantities(prev => ({ ...prev, [productId]: 0 }));
-        
-        return true;
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to update stock');
+      const shopId = getShopId();
+      if (!shopId) {
+        setError('Shop not found. Please login again.');
         return false;
       }
+
+      // Get current product
+      const product = inventoryData.find(p => p.id === productId);
+      if (!product) return false;
+
+      const newStock = Math.max(0, product.stock + change);
+      
+      // Call API to update stock
+      const updatedProduct = await inventoryService.updateStock(productId, newStock);
+      
+      // Update the product in the local state
+      setInventoryData(prev => 
+        prev.map(p => p.id === productId ? updatedProduct : p)
+      );
+      
+      // Reset quantity display for this product
+      setQuantities(prev => ({ ...prev, [productId]: 0 }));
+      
+      const productName = product.name || 'Product';
+      
+      // Create status-specific messages
+      let statusMessage = '';
+      let alertType = '';
+      
+      if (updatedProduct.status === 'In Stock') {
+        statusMessage = `✅ ${productName}: Stock is healthy (${updatedProduct.stock} units available - Limit: ${updatedProduct.stock_limit})`;
+        alertType = 'success';
+      } else if (updatedProduct.status === 'Low Stock') {
+        statusMessage = `⚠️ ${productName}: Running low on stock (${updatedProduct.stock} units remaining - Limit: ${updatedProduct.stock_limit})`;
+        alertType = 'warning';
+      } else if (updatedProduct.status === 'Out of Stock') {
+        statusMessage = `🚨 ${productName}: OUT OF STOCK! (0 units available)`;
+        alertType = 'danger';
+      }
+      
+      // Show alert based on status
+      if (updatedProduct.status === 'Low Stock' || updatedProduct.status === 'Out of Stock') {
+        let colorInfo = {};
+        if (updatedProduct.status === 'Out of Stock') {
+          colorInfo = { bg: 'bg-red-50', border: 'border-red-500', icon: 'text-red-500', type: 'danger' };
+        } else {
+          colorInfo = { bg: 'bg-blue-50', border: 'border-blue-500', icon: 'text-blue-500', type: 'warning' };
+        }
+        setAlerts(prev => [...prev, { 
+          message: statusMessage, 
+          type: colorInfo.type,
+          bgColor: colorInfo.bg,
+          borderColor: colorInfo.border,
+          iconColor: colorInfo.icon
+        }]);
+        // Auto-dismiss alerts after 30 seconds
+        setTimeout(() => {
+          setAlerts(prev => prev.filter(a => a.message !== statusMessage));
+        }, 30000);
+      } else {
+        // Show success message
+        setSuccess(statusMessage);
+        // Auto-dismiss success message after 30 seconds
+        setTimeout(() => {
+          setSuccess('');
+        }, 30000);
+      }
+      
+      return true;
     } catch (error) {
       console.error('Error updating stock:', error);
-      setError('Network error. Please check server connection.');
+      setError(error.response?.data?.error || 'Failed to update stock');
       return false;
     }
   };
@@ -157,12 +173,13 @@ const Inventory = () => {
     const product = inventoryData.find(p => p.id === productId);
     if (!product) return;
     
-    // Calculate new quantity
+    // Calculate new stock
     const newStock = product.stock + change;
     
     // Prevent negative stock
     if (newStock < 0) {
       setError(`Cannot reduce stock below 0 for ${product.name}`);
+      setTimeout(() => setError(''), 5000);
       return;
     }
     
@@ -200,8 +217,8 @@ const Inventory = () => {
   const outOfStock = inventoryData.filter(item => item.status === 'Out of Stock').length;
 
   const filteredItems = inventoryData.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          item.sku.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = item.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          item.sku?.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesSearch;
   });
 
@@ -224,81 +241,87 @@ const Inventory = () => {
     setError('');
     setSuccess('');
     
+    // Validate form
+    if (!formData.name.trim()) {
+      setError('Product name is required');
+      return;
+    }
+    if (!formData.sku.trim()) {
+      setError('SKU is required');
+      return;
+    }
+    if (!formData.price || parseFloat(formData.price) <= 0) {
+      setError('Please enter a valid price');
+      return;
+    }
+    if (!formData.stock || parseInt(formData.stock) < 0) {
+      setError('Please enter a valid stock quantity');
+      return;
+    }
+    if (!formData.stock_limit || parseInt(formData.stock_limit) < 1) {
+      setError('Stock limit must be at least 1');
+      return;
+    }
+
     const productData = {
-      ...formData,
+      name: formData.name.trim(),
+      sku: formData.sku.trim(),
+      description: formData.description || '',
       price: parseFloat(formData.price),
       cost: parseFloat(formData.cost || 0),
       stock: parseInt(formData.stock),
-      stock_limit: parseInt(formData.stock_limit)
+      stock_limit: parseInt(formData.stock_limit),
+      image_url: formData.image_url || ''
     };
+
+    console.log('📤 Sending product data:', productData);
 
     try {
       let imageUrl = formData.image_url;
       
       if (imageFile) {
-        const formDataImage = new FormData();
-        formDataImage.append('image', imageFile);
-        
-        const uploadResponse = await fetch('http://localhost:5000/api/upload', {
-          method: 'POST',
-          credentials: 'include',
-          body: formDataImage
-        });
-        
-        if (uploadResponse.ok) {
-          const uploadData = await uploadResponse.json();
-          imageUrl = uploadData.image_url;
+        const uploadResult = await uploadService.uploadProductImage(null, null, imageFile);
+        if (uploadResult.image_url) {
+          imageUrl = uploadResult.image_url;
+          productData.image_url = imageUrl;
         }
       }
-      
-      productData.image_url = imageUrl;
 
-      const url = editingProduct 
-        ? `http://localhost:5000/api/products/${editingProduct.id}`
-        : 'http://localhost:5000/api/products';
-      
-      const response = await fetch(url, {
-        method: editingProduct ? 'PUT' : 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
-        body: JSON.stringify(productData),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (editingProduct) {
-          setInventoryData(prev => prev.map(p => p.id === data.id ? data : p));
-        } else {
-          setInventoryData(prev => [...prev, data]);
-        }
-        setSuccess(editingProduct ? 'Product updated successfully!' : 'Product added successfully!');
-        setShowModal(false);
-        setEditingProduct(null);
-        setImagePreview(null);
-        setImageFile(null);
-        setFormData({
-          name: '',
-          sku: '',
-          description: '',
-          price: '',
-          cost: '',
-          stock: '',
-          stock_limit: '50',
-          image_url: ''
-        });
-        fetchProducts();
-        setTimeout(() => {
-          setSuccess('');
-        }, 1800000);
+      let result;
+      if (editingProduct) {
+        result = await inventoryService.updateProduct(editingProduct.id, productData);
+        setInventoryData(prev => prev.map(p => p.id === result.id ? result : p));
+        setSuccess('Product updated successfully!');
       } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to save product');
+        result = await inventoryService.createProduct(productData);
+        setInventoryData(prev => [...prev, result]);
+        setSuccess('Product added successfully!');
       }
+      
+      // Reset quantities
+      setQuantities(prev => ({ ...prev, [result.id]: 0 }));
+      
+      setShowModal(false);
+      setEditingProduct(null);
+      setImagePreview(null);
+      setImageFile(null);
+      setFormData({
+        name: '',
+        sku: '',
+        description: '',
+        price: '',
+        cost: '',
+        stock: '',
+        stock_limit: '50',
+        image_url: ''
+      });
+      
+      setTimeout(() => {
+        setSuccess('');
+      }, 5000);
     } catch (error) {
       console.error('Error saving product:', error);
-      setError('Network error. Please check if the server is running.');
+      setError(error.response?.data?.error || error.message || 'Failed to save product. Please try again.');
     }
   };
 
@@ -306,12 +329,12 @@ const Inventory = () => {
   const handleEdit = (product) => {
     setEditingProduct(product);
     setFormData({
-      name: product.name,
-      sku: product.sku,
+      name: product.name || '',
+      sku: product.sku || '',
       description: product.description || '',
-      price: product.price.toString(),
+      price: product.price?.toString() || '',
       cost: product.cost?.toString() || '',
-      stock: product.stock.toString(),
+      stock: product.stock?.toString() || '',
       stock_limit: product.stock_limit?.toString() || '50',
       image_url: product.image_url || ''
     });
@@ -325,27 +348,30 @@ const Inventory = () => {
   const handleDelete = async (productId) => {
     if (window.confirm('Are you sure you want to delete this product?')) {
       try {
-        const response = await fetch(`http://localhost:5000/api/products/${productId}`, {
-          method: 'DELETE',
-          credentials: 'include'
+        await inventoryService.deleteProduct(productId);
+        setInventoryData(prev => prev.filter(p => p.id !== productId));
+        // Remove from quantities
+        setQuantities(prev => {
+          const newQuantities = { ...prev };
+          delete newQuantities[productId];
+          return newQuantities;
         });
-        if (response.ok) {
-          setInventoryData(prev => prev.filter(p => p.id !== productId));
-          setSuccess('Product deleted successfully!');
-        }
+        setSuccess('Product deleted successfully!');
+        setTimeout(() => setSuccess(''), 5000);
       } catch (error) {
         console.error('Error deleting product:', error);
-        setError('Network error.');
+        setError(error.response?.data?.error || 'Failed to delete product.');
+        setTimeout(() => setError(''), 5000);
       }
     }
   };
 
-  // Auto-dismiss alerts after 30 minutes
+  // Auto-dismiss alerts after 30 seconds
   useEffect(() => {
     if (alerts.length > 0) {
       const timer = setTimeout(() => {
         setAlerts([]);
-      }, 1800000);
+      }, 30000);
       return () => clearTimeout(timer);
     }
   }, [alerts]);
@@ -379,9 +405,10 @@ const Inventory = () => {
 
       {/* Error Messages */}
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
-          {error}
-          <button onClick={() => setError('')} className="ml-2 text-red-500 hover:text-red-700">×</button>
+        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="ml-auto text-red-500 hover:text-red-700">×</button>
         </div>
       )}
 
@@ -391,6 +418,7 @@ const Inventory = () => {
           success.includes('healthy') ? 'bg-green-50 border border-green-200' :
           success.includes('Running low') ? 'bg-blue-50 border border-blue-200' :
           success.includes('OUT OF STOCK') ? 'bg-red-50 border border-red-200' :
+          success.includes('added') || success.includes('updated') || success.includes('deleted') ? 'bg-green-50 border border-green-200' :
           'bg-green-50 border border-green-200'
         }`}>
           <div className="flex items-center justify-between">
@@ -564,7 +592,7 @@ const Inventory = () => {
                   <div className="p-4">
                     <div className="flex items-start justify-between mb-1">
                       <h4 className="font-semibold text-gray-900 text-lg">{item.name}</h4>
-                      <span className="text-sm font-bold text-blue-600">KES {item.price.toFixed(2)}</span>
+                      <span className="text-sm font-bold text-blue-600">KES {item.price?.toFixed(2) || '0.00'}</span>
                     </div>
                     <div className="flex items-center gap-2 mb-3">
                       <span className="text-xs px-2 py-0.5 bg-gray-100 rounded-full text-gray-600">
@@ -672,7 +700,7 @@ const Inventory = () => {
                             </div>
                           </td>
                           <td className="py-3 px-4 text-gray-600">{item.sku}</td>
-                          <td className="py-3 px-4 font-medium text-blue-600">KES {item.price.toFixed(2)}</td>
+                          <td className="py-3 px-4 font-medium text-blue-600">KES {item.price?.toFixed(2) || '0.00'}</td>
                           <td className="py-3 px-4">
                             <span className={`font-medium ${
                               item.stock >= item.stock_limit ? 'text-green-600' : 
@@ -854,6 +882,7 @@ const Inventory = () => {
                     type="number"
                     required
                     step="0.01"
+                    min="0"
                     value={formData.price}
                     onChange={(e) => setFormData({...formData, price: e.target.value})}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -867,6 +896,7 @@ const Inventory = () => {
                   <input
                     type="number"
                     step="0.01"
+                    min="0"
                     value={formData.cost}
                     onChange={(e) => setFormData({...formData, cost: e.target.value})}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"

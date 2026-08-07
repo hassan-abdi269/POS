@@ -10,18 +10,24 @@ import {
   LogOut,
   Menu,
   X,
-  Bell
+  Bell,
+  User
 } from 'lucide-react';
+import { authService } from '../service/api';
 
 const SuperAdminLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    localStorage.removeItem('superAdminToken');
-    localStorage.removeItem('userRole');
-    localStorage.removeItem('userEmail');
-    navigate('/superadmin/login');
+  const handleLogout = async () => {
+    try {
+      await authService.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Still clear local data even if API call fails
+      localStorage.removeItem('user');
+      navigate('/superadmin/login');
+    }
   };
 
   const navItems = [
@@ -32,7 +38,13 @@ const SuperAdminLayout = () => {
     { path: '/superadmin/settings', icon: Settings, label: 'Settings' },
   ];
 
-  const userEmail = localStorage.getItem('userEmail') || 'Super Admin';
+  // ✅ Get user from authService (which uses localStorage.getItem('user'))
+  const user = authService.getCurrentUser();
+  console.log('👤 SuperAdminLayout user:', user);
+  
+  const userEmail = user?.email || 'Super Admin';
+  const userName = user?.username || userEmail.split('@')[0] || 'Admin';
+  const userInitial = userName.charAt(0).toUpperCase();
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -76,6 +88,20 @@ const SuperAdminLayout = () => {
         </nav>
 
         <div className="p-4 border-t border-gray-800">
+          {/* User Info */}
+          {sidebarOpen && (
+            <div className="mb-3 px-3 py-2 bg-gray-800 rounded-lg">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                  {userInitial}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">{userName}</p>
+                  <p className="text-xs text-gray-400 truncate">{userEmail}</p>
+                </div>
+              </div>
+            </div>
+          )}
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-red-600 hover:text-white transition-colors w-full"
@@ -99,11 +125,11 @@ const SuperAdminLayout = () => {
               </span>
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold">
-                {userEmail.charAt(0).toUpperCase()}
+              <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
+                {userInitial}
               </div>
               <span className="text-sm font-medium text-gray-700 hidden md:block">
-                {userEmail}
+                {userName}
               </span>
             </div>
           </div>
