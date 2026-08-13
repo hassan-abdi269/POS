@@ -15,6 +15,7 @@ python-dotenv = "*"
 pymysql = "*"
 gunicorn = "*"
 openpyxl = "*"
+reportlab = "*"
 
 [dev-packages]
 
