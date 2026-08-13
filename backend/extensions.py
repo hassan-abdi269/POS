@@ -1,39 +1,36 @@
-# extensions.py
-
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from flask_cors import CORS
 from flask_session import Session
 from flask_login import LoginManager
 from flask_bcrypt import Bcrypt
 
 
-# Database
+# ==========================================
+# DATABASE
+# ==========================================
+
 db = SQLAlchemy()
 
 
-# Migration
+# ==========================================
+# DATABASE MIGRATIONS
+# ==========================================
+
 migrate = Migrate()
 
 
-# CORS
-cors = CORS()
+# ==========================================
+# SERVER-SIDE SESSIONS
+# ==========================================
 
-
-# Server-side sessions
 session = Session()
 
 
-# Flask-Login
+# ==========================================
+# FLASK-LOGIN
+# ==========================================
+
 login_manager = LoginManager()
-
-
-# Password hashing
-bcrypt = Bcrypt()
-
-
-
-# Flask-Login configuration
 
 login_manager.login_view = None
 
@@ -44,3 +41,10 @@ login_manager.login_message = (
 login_manager.login_message_category = (
     "error"
 )
+
+
+# ==========================================
+# PASSWORD HASHING
+# ==========================================
+
+bcrypt = Bcrypt()

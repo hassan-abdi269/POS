@@ -2,9 +2,8 @@ import os
 
 from dotenv import load_dotenv
 
-# Load .env at the VERY TOP with override
+# Load environment variables
 load_dotenv(override=True)
-
 
 from flask import (
     Flask,
@@ -15,7 +14,6 @@ from flask import (
 )
 
 from flask_cors import CORS
-
 from flask_session import Session
 
 from flask_login import (
@@ -25,7 +23,6 @@ from flask_login import (
 
 from sqlalchemy import text
 
-
 from extensions import (
     db,
     migrate,
@@ -33,18 +30,12 @@ from extensions import (
     bcrypt
 )
 
-
 from config import config
 
-
 from routes import init_routes
-
-
 from routes.auth import AdminUser
 
-
 from models.shop import Shop
-
 
 
 # ==================================================
@@ -53,41 +44,39 @@ from models.shop import Shop
 
 def create_app(config_name="development"):
 
-
     app = Flask(__name__)
 
-
-
+    # Load selected configuration
     app.config.from_object(
-        config[config_name]
+        config.get(
+            config_name,
+            config["default"]
+        )
     )
 
-
-
     # ==============================================
-    # SESSION SETTINGS - FIXED
+    # SESSION CONFIGURATION
     # ==============================================
 
     app.config["SESSION_TYPE"] = "filesystem"
     app.config["SESSION_PERMANENT"] = True
     app.config["SESSION_USE_SIGNER"] = True
     app.config["SESSION_KEY_PREFIX"] = "tirsi_"
-    
-    # Use the config value directly (it's already a timedelta)
-    app.config["PERMANENT_SESSION_LIFETIME"] = app.config["PERMANENT_SESSION_LIFETIME"]
 
-    # CRITICAL: Cookie settings for cross-origin
     app.config["SESSION_COOKIE_NAME"] = "session"
-    app.config["SESSION_COOKIE_DOMAIN"] = None  # Allow all domains
+    app.config["SESSION_COOKIE_DOMAIN"] = None
     app.config["SESSION_COOKIE_PATH"] = "/"
     app.config["SESSION_COOKIE_HTTPONLY"] = True
-    app.config["SESSION_COOKIE_SECURE"] = False  # Set to True in production with HTTPS
-    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    
-    # Refresh session on each request
+
     app.config["SESSION_REFRESH_EACH_REQUEST"] = True
 
-
+    # Production uses HTTPS + cross-origin cookies.
+    if config_name == "production":
+        app.config["SESSION_COOKIE_SECURE"] = True
+        app.config["SESSION_COOKIE_SAMESITE"] = "None"
+    else:
+        app.config["SESSION_COOKIE_SECURE"] = False
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
     # ==============================================
     # EXTENSIONS
@@ -95,61 +84,55 @@ def create_app(config_name="development"):
 
     initialize_extensions(app)
 
-
+    # ==============================================
+    # FLASK-LOGIN
+    # ==============================================
 
     setup_login_manager(app)
 
+    # ==============================================
+    # ROUTES
+    # ==============================================
 
-
-    # Register all routes
     init_routes(app)
-
-
 
     register_core_routes(app)
 
-
-
     register_error_handlers(app)
-
-
 
     return app
 
 
-
-
-
 # ==================================================
-# EXTENSION INITIALIZATION - FIXED
+# EXTENSION INITIALIZATION
 # ==================================================
 
 def initialize_extensions(app):
 
-
+    # Database
     db.init_app(app)
 
-
+    # Migrations
     migrate.init_app(
         app,
         db
     )
 
+    # ==============================================
+    # CORS
+    # ==============================================
 
-    # FIXED: CORS with proper credentials
+    allowed_origins = app.config.get(
+        "CORS_ORIGINS",
+        []
+    )
+
     CORS(
         app,
 
-        origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            "http://localhost:5174",
-            "http://127.0.0.1:5174"
-        ],
+        origins=allowed_origins,
 
-        supports_credentials=True,  # CRITICAL
+        supports_credentials=True,
 
         allow_headers=[
             "Content-Type",
@@ -160,7 +143,7 @@ def initialize_extensions(app):
             "Origin",
             "Access-Control-Request-Method",
             "Access-Control-Request-Headers",
-            "Cookie"  # ADD THIS
+            "Cookie"
         ],
 
         methods=[
@@ -171,32 +154,27 @@ def initialize_extensions(app):
             "DELETE",
             "OPTIONS"
         ],
-        
+
         expose_headers=[
             "Content-Type",
-            "X-Requested-With",
-            "Set-Cookie"  # ADD THIS
+            "X-Requested-With"
         ],
-        
+
         max_age=86400
     )
 
-
-
+    # Server-side sessions
     Session(app)
 
+    # Flask-Login
+    login_manager.init_app(app)
 
+    # Bcrypt
+    bcrypt.init_app(app)
 
-    login_manager.init_app(
-        app
-    )
-
-
-    bcrypt.init_app(
-        app
-    )
-
-
+    # ==============================================
+    # TEST DATABASE CONNECTION
+    # ==============================================
 
     with app.app_context():
 
@@ -210,7 +188,6 @@ def initialize_extensions(app):
                 "✅ MySQL database connected"
             )
 
-
         except Exception as e:
 
             print(
@@ -218,71 +195,56 @@ def initialize_extensions(app):
             )
 
 
-
-
-
 # ==================================================
-# FLASK LOGIN SETUP
+# FLASK-LOGIN SETUP
 # ==================================================
 
 def setup_login_manager(app):
 
-
     login_manager.session_protection = "strong"
-
-
 
     @login_manager.user_loader
     def load_user(user_id):
 
-
         try:
 
-
+            # ======================================
             # ADMIN USER
+            # ======================================
+
             if user_id == "1":
 
                 return AdminUser(
                     app.config["ADMIN_EMAIL"]
                 )
 
-
-
+            # ======================================
             # SHOP USER
+            # ======================================
 
             shop_id = int(user_id)
-
 
             shop = Shop.query.get(
                 shop_id
             )
 
-
             if shop:
-
                 return shop
 
-
-
         except Exception as e:
-
 
             app.logger.error(
                 f"User loading error: {e}"
             )
 
-
-
         return None
 
-
-    # Unauthorized handler
     @login_manager.unauthorized_handler
     def unauthorized_handler():
-        return jsonify({"error": "Unauthorized"}), 401
 
-
-
+        return jsonify({
+            "error": "Unauthorized"
+        }), 401
 
 
 # ==================================================
@@ -291,10 +253,12 @@ def setup_login_manager(app):
 
 def register_core_routes(app):
 
+    # ==============================================
+    # HEALTH CHECK
+    # ==============================================
 
     @app.route("/health")
     def health():
-
 
         try:
 
@@ -304,12 +268,9 @@ def register_core_routes(app):
 
             database = "connected"
 
-
         except Exception as e:
 
             database = str(e)
-
-
 
         return jsonify({
 
@@ -326,12 +287,12 @@ def register_core_routes(app):
         })
 
 
-
-
+    # ==============================================
+    # ROOT
+    # ==============================================
 
     @app.route("/")
     def index():
-
 
         return jsonify({
 
@@ -347,18 +308,17 @@ def register_core_routes(app):
         })
 
 
-
-
+    # ==============================================
+    # UPLOADS
+    # ==============================================
 
     @app.route("/uploads/<filename>")
     def uploads(filename):
-
 
         upload_folder = os.path.join(
             app.root_path,
             "uploads"
         )
-
 
         return send_from_directory(
             upload_folder,
@@ -366,12 +326,9 @@ def register_core_routes(app):
         )
 
 
-
-
-
-    # ======================
+    # ==============================================
     # SESSION CHECK
-    # ======================
+    # ==============================================
 
     @app.route(
         "/api/auth/session-check",
@@ -379,20 +336,51 @@ def register_core_routes(app):
     )
     def session_check():
 
-        app.logger.debug(f"Session check - Authenticated: {current_user.is_authenticated}")
-        app.logger.debug(f"Session data: {dict(session) if session else 'No session'}")
-        app.logger.debug(f"Cookies: {request.cookies.to_dict()}")
-        
+        app.logger.debug(
+            "Session check - "
+            f"Authenticated: "
+            f"{current_user.is_authenticated}"
+        )
+
+        app.logger.debug(
+            f"Session data: "
+            f"{dict(session) if session else 'No session'}"
+        )
+
+        app.logger.debug(
+            f"Cookies: "
+            f"{request.cookies.to_dict()}"
+        )
+
         if current_user.is_authenticated:
 
             user_data = {
-                "id": current_user.get_id(),
-                "email": getattr(current_user, "email", None),
-                "username": getattr(current_user, "username", None),
-                "is_admin": getattr(current_user, "is_admin", False)
+
+                "id":
+                    current_user.get_id(),
+
+                "email":
+                    getattr(
+                        current_user,
+                        "email",
+                        None
+                    ),
+
+                "username":
+                    getattr(
+                        current_user,
+                        "username",
+                        None
+                    ),
+
+                "is_admin":
+                    getattr(
+                        current_user,
+                        "is_admin",
+                        False
+                    )
+
             }
-            
-            app.logger.debug(f"User data: {user_data}")
 
             return jsonify({
 
@@ -402,8 +390,6 @@ def register_core_routes(app):
 
             }), 200
 
-
-
         return jsonify({
 
             "authenticated": False
@@ -411,15 +397,13 @@ def register_core_routes(app):
         }), 401
 
 
+    # ==============================================
+    # TEST AUTH
+    # ==============================================
 
-
-
-    @app.route(
-        "/api/test-auth"
-    )
+    @app.route("/api/test-auth")
     @login_required
     def test_auth():
-
 
         return jsonify({
 
@@ -439,15 +423,11 @@ def register_core_routes(app):
         })
 
 
-
-
-
 # ==================================================
 # ERROR HANDLERS
 # ==================================================
 
 def register_error_handlers(app):
-
 
     @app.errorhandler(401)
     def unauthorized(error):
@@ -458,9 +438,6 @@ def register_error_handlers(app):
                 "Unauthorized"
 
         }), 401
-
-
-
 
 
     @app.errorhandler(404)
@@ -474,11 +451,12 @@ def register_error_handlers(app):
         }), 404
 
 
-
-
-
     @app.errorhandler(500)
     def server_error(error):
+
+        app.logger.exception(
+            "Internal server error"
+        )
 
         return jsonify({
 
@@ -488,11 +466,8 @@ def register_error_handlers(app):
         }), 500
 
 
-
-
-
 # ==================================================
-# START APPLICATION
+# CREATE APPLICATION
 # ==================================================
 
 app = create_app(
@@ -503,15 +478,22 @@ app = create_app(
 )
 
 
+# ==================================================
+# LOCAL DEVELOPMENT
+# ==================================================
 
 if __name__ == "__main__":
-
 
     app.run(
 
         host="0.0.0.0",
 
-        port=5000,
+        port=int(
+            os.getenv(
+                "PORT",
+                5000
+            )
+        ),
 
         debug=app.config["DEBUG"]
 

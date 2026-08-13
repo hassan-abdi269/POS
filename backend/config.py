@@ -2,12 +2,12 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class Config:
     """
-    Base configuration
+    Base configuration for Tirsi POS.
     """
 
     # =====================================
@@ -28,24 +28,10 @@ class Config:
         "tirsi_user"
     )
 
-    # ✅ FIXED: Read password from hidden file
-    def _get_db_password():
-        """Read database password from hidden credentials file"""
-        password_file = os.path.expanduser("~/.db-credentials/password")
-        try:
-            with open(password_file, 'r') as f:
-                password = f.read().strip()
-                print(f"✅ Database password loaded from: {password_file}")
-                return password
-        except FileNotFoundError:
-            print(f"❌ Password file not found: {password_file}")
-            # Fallback to environment variable
-            return os.getenv("DB_PASSWORD", "")
-        except Exception as e:
-            print(f"❌ Error reading password file: {e}")
-            return os.getenv("DB_PASSWORD", "")
-
-    DB_PASSWORD = _get_db_password()
+    DB_PASSWORD = os.getenv(
+        "DB_PASSWORD",
+        ""
+    )
 
     DB_HOST = os.getenv(
         "DB_HOST",
@@ -98,14 +84,22 @@ class Config:
     )
 
     # =====================================
-    # SESSION CONFIGURATION
+    # SESSION
     # =====================================
 
     SESSION_TYPE = "filesystem"
     SESSION_PERMANENT = True
     SESSION_USE_SIGNER = True
-    PERMANENT_SESSION_LIFETIME = timedelta(days=7)
+    SESSION_KEY_PREFIX = "tirsi_"
+
+    PERMANENT_SESSION_LIFETIME = timedelta(
+        days=7
+    )
+
     SESSION_COOKIE_HTTPONLY = True
+    SESSION_REFRESH_EACH_REQUEST = True
+
+    # Development defaults
     SESSION_COOKIE_SECURE = False
     SESSION_COOKIE_SAMESITE = "Lax"
 
@@ -115,7 +109,15 @@ class Config:
 
     CORS_ORIGINS = [
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+
+        # Your Render frontend URL
+        # Replace this after you know the exact URL.
+        "https://YOUR-POS-FRONTEND.onrender.com"
     ]
 
     CORS_SUPPORTS_CREDENTIALS = True
@@ -132,11 +134,7 @@ class Config:
     API_PREFIX = "/api"
 
     DEBUG = (
-        os.getenv(
-            "DEBUG",
-            "True"
-        )
-        == "True"
+        os.getenv("DEBUG", "True") == "True"
     )
 
     ENV = os.getenv(
@@ -149,10 +147,14 @@ class DevelopmentConfig(Config):
     DEBUG = True
     ENV = "development"
 
+    SESSION_COOKIE_SECURE = False
+    SESSION_COOKIE_SAMESITE = "Lax"
+
 
 class ProductionConfig(Config):
     DEBUG = False
     ENV = "production"
+
     SESSION_COOKIE_SECURE = True
     SESSION_COOKIE_SAMESITE = "None"
 
