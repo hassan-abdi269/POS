@@ -20,7 +20,7 @@ class Config:
     )
 
     # =====================================
-    # DATABASE
+    # DATABASE - AIVEN MYSQL
     # =====================================
 
     DB_USER = os.getenv(
@@ -55,6 +55,7 @@ class Config:
         f"{DB_HOST}:"
         f"{DB_PORT}/"
         f"{DB_NAME}"
+        "?ssl=true"
     )
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -62,7 +63,8 @@ class Config:
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,
         "pool_recycle": 3600,
-        "pool_size": 10,
+        "pool_size": 5,
+        "max_overflow": 10,
         "pool_timeout": 30
     }
 
@@ -76,11 +78,13 @@ class Config:
     )
 
     ADMIN_PASSWORD_HASH = os.getenv(
-        "ADMIN_PASSWORD_HASH"
+        "ADMIN_PASSWORD_HASH",
+        ""
     )
 
     ADMIN_PASSWORD = os.getenv(
-        "ADMIN_PASSWORD"
+        "ADMIN_PASSWORD",
+        ""
     )
 
     # =====================================
@@ -96,10 +100,11 @@ class Config:
         days=7
     )
 
+    SESSION_COOKIE_NAME = "session"
     SESSION_COOKIE_HTTPONLY = True
     SESSION_REFRESH_EACH_REQUEST = True
 
-    # Development defaults
+    # Defaults for development
     SESSION_COOKIE_SECURE = False
     SESSION_COOKIE_SAMESITE = "Lax"
 
@@ -115,9 +120,8 @@ class Config:
         "http://localhost:5174",
         "http://127.0.0.1:5174",
 
-        # Your Render frontend URL
-        # Replace this after you know the exact URL.
-        "https://YOUR-POS-FRONTEND.onrender.com"
+        # Render frontend
+        "https://pos-frontend-j0hd.onrender.com"
     ]
 
     CORS_SUPPORTS_CREDENTIALS = True
@@ -134,7 +138,10 @@ class Config:
     API_PREFIX = "/api"
 
     DEBUG = (
-        os.getenv("DEBUG", "True") == "True"
+        os.getenv(
+            "DEBUG",
+            "False"
+        ).lower() == "true"
     )
 
     ENV = os.getenv(
@@ -155,7 +162,10 @@ class ProductionConfig(Config):
     DEBUG = False
     ENV = "production"
 
+    # Render uses HTTPS
     SESSION_COOKIE_SECURE = True
+
+    # Required for frontend/backend on different domains
     SESSION_COOKIE_SAMESITE = "None"
 
 
