@@ -20,7 +20,7 @@ class Config:
     )
 
     # =====================================
-    # DATABASE - AIVEN MYSQL
+    # DATABASE
     # =====================================
 
     DB_USER = os.getenv(
@@ -48,6 +48,10 @@ class Config:
         "tirsi_pos_db"
     )
 
+    # =====================================
+    # DATABASE URI
+    # =====================================
+
     SQLALCHEMY_DATABASE_URI = (
         f"mysql+pymysql://"
         f"{DB_USER}:"
@@ -55,17 +59,20 @@ class Config:
         f"{DB_HOST}:"
         f"{DB_PORT}/"
         f"{DB_NAME}"
-        "?ssl=true"
     )
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # =====================================
+    # SQLALCHEMY
+    # =====================================
 
     SQLALCHEMY_ENGINE_OPTIONS = {
         "pool_pre_ping": True,
         "pool_recycle": 3600,
         "pool_size": 5,
         "max_overflow": 10,
-        "pool_timeout": 30
+        "pool_timeout": 30,
     }
 
     # =====================================
@@ -92,20 +99,26 @@ class Config:
     # =====================================
 
     SESSION_TYPE = "filesystem"
+
     SESSION_PERMANENT = True
+
     SESSION_USE_SIGNER = True
+
     SESSION_KEY_PREFIX = "tirsi_"
+
+    SESSION_COOKIE_NAME = "session"
+
+    SESSION_COOKIE_HTTPONLY = True
+
+    SESSION_REFRESH_EACH_REQUEST = True
 
     PERMANENT_SESSION_LIFETIME = timedelta(
         days=7
     )
 
-    SESSION_COOKIE_NAME = "session"
-    SESSION_COOKIE_HTTPONLY = True
-    SESSION_REFRESH_EACH_REQUEST = True
-
-    # Defaults for development
+    # Development defaults
     SESSION_COOKIE_SECURE = False
+
     SESSION_COOKIE_SAMESITE = "Lax"
 
     # =====================================
@@ -113,15 +126,20 @@ class Config:
     # =====================================
 
     CORS_ORIGINS = [
+        # Local Vite
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+
+        # Local React
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+
+        # Other local Vite ports
         "http://localhost:5174",
         "http://127.0.0.1:5174",
 
-        # Render frontend
-        "https://pos-frontend-j0hd.onrender.com"
+        # Production frontend
+        "https://pos-frontend-j0hd.onrender.com",
     ]
 
     CORS_SUPPORTS_CREDENTIALS = True
@@ -151,26 +169,68 @@ class Config:
 
 
 class DevelopmentConfig(Config):
+    """
+    Development configuration.
+    """
+
     DEBUG = True
+
     ENV = "development"
 
     SESSION_COOKIE_SECURE = False
+
     SESSION_COOKIE_SAMESITE = "Lax"
+
+    # Local MySQL does not need Aiven SSL.
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_timeout": 30,
+    }
 
 
 class ProductionConfig(Config):
+    """
+    Production configuration for Render + Aiven MySQL.
+    """
+
     DEBUG = False
+
     ENV = "production"
 
-    # Render uses HTTPS
+    # =====================================
+    # HTTPS SESSION COOKIES
+    # =====================================
+
     SESSION_COOKIE_SECURE = True
 
-    # Required for frontend/backend on different domains
     SESSION_COOKIE_SAMESITE = "None"
 
+    # =====================================
+    # AIVEN MYSQL SSL
+    # =====================================
+
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 3600,
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_timeout": 30,
+
+        "connect_args": {
+            "ssl": {}
+        },
+    }
+
+
+# =========================================
+# CONFIGURATION MAP
+# =========================================
 
 config = {
     "development": DevelopmentConfig,
     "production": ProductionConfig,
-    "default": DevelopmentConfig
+    "default": DevelopmentConfig,
 }
