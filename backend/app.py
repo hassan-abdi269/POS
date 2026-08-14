@@ -1,9 +1,18 @@
 import os
+import traceback
 
 from dotenv import load_dotenv
 
-# Load environment variables
+# ============================================================
+# LOAD ENVIRONMENT VARIABLES
+# ============================================================
+
 load_dotenv(override=True)
+
+
+# ============================================================
+# FLASK IMPORTS
+# ============================================================
 
 from flask import (
     Flask,
@@ -23,6 +32,11 @@ from flask_login import (
 
 from sqlalchemy import text
 
+
+# ============================================================
+# APPLICATION IMPORTS
+# ============================================================
+
 from extensions import (
     db,
     migrate,
@@ -38,189 +52,467 @@ from routes.auth import AdminUser
 from models.shop import Shop
 
 
-# ==================================================
+# ============================================================
 # APPLICATION FACTORY
-# ==================================================
+# ============================================================
 
 def create_app(config_name="development"):
 
     app = Flask(__name__)
 
-    # Load selected configuration
-    app.config.from_object(
-        config.get(
-            config_name,
-            config["default"]
+    # ========================================================
+    # VALIDATE CONFIGURATION NAME
+    # ========================================================
+
+    if config_name not in config:
+        config_name = "default"
+
+    # ========================================================
+    # LOAD SELECTED CONFIGURATION
+    # ========================================================
+
+    try:
+
+        app.config.from_object(
+            config[config_name]
         )
+
+    except Exception as e:
+
+        print("❌ Failed to load Flask configuration")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
+    # DISPLAY BASIC CONFIGURATION
+    # ========================================================
+
+    print("=" * 60)
+    print("🚀 Starting Tirsi POS")
+    print("=" * 60)
+
+    print(
+        f"Environment: "
+        f"{app.config.get('ENV')}"
     )
 
-    # ==============================================
+    print(
+        f"Debug: "
+        f"{app.config.get('DEBUG')}"
+    )
+
+    print(
+        f"Database Host: "
+        f"{app.config.get('DB_HOST')}"
+    )
+
+    print(
+        f"Database Port: "
+        f"{app.config.get('DB_PORT')}"
+    )
+
+    print(
+        f"Database Name: "
+        f"{app.config.get('DB_NAME')}"
+    )
+
+    print(
+        f"Database User: "
+        f"{app.config.get('DB_USER')}"
+    )
+
+    # NEVER print the actual password
+    print(
+        "Database Password: "
+        f"{'SET' if app.config.get('DB_PASSWORD') else 'NOT SET'}"
+    )
+
+    # ========================================================
     # SESSION CONFIGURATION
-    # ==============================================
+    # ========================================================
 
     app.config["SESSION_TYPE"] = "filesystem"
+
     app.config["SESSION_PERMANENT"] = True
+
     app.config["SESSION_USE_SIGNER"] = True
+
     app.config["SESSION_KEY_PREFIX"] = "tirsi_"
 
     app.config["SESSION_COOKIE_NAME"] = "session"
+
     app.config["SESSION_COOKIE_DOMAIN"] = None
+
     app.config["SESSION_COOKIE_PATH"] = "/"
+
     app.config["SESSION_COOKIE_HTTPONLY"] = True
 
     app.config["SESSION_REFRESH_EACH_REQUEST"] = True
 
-    # Production uses HTTPS + cross-origin cookies.
+    # ========================================================
+    # PRODUCTION SESSION SETTINGS
+    # ========================================================
+
     if config_name == "production":
+
         app.config["SESSION_COOKIE_SECURE"] = True
+
         app.config["SESSION_COOKIE_SAMESITE"] = "None"
+
     else:
+
         app.config["SESSION_COOKIE_SECURE"] = False
+
         app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
-    # ==============================================
+    # ========================================================
     # EXTENSIONS
-    # ==============================================
+    # ========================================================
 
     initialize_extensions(app)
 
-    # ==============================================
-    # FLASK-LOGIN
-    # ==============================================
+    # ========================================================
+    # FLASK LOGIN
+    # ========================================================
 
     setup_login_manager(app)
 
-    # ==============================================
-    # ROUTES
-    # ==============================================
+    # ========================================================
+    # APPLICATION ROUTES
+    # ========================================================
 
-    init_routes(app)
+    try:
+
+        init_routes(app)
+
+    except Exception as e:
+
+        print("❌ Failed to register application routes")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
+    # CORE ROUTES
+    # ========================================================
 
     register_core_routes(app)
 
+    # ========================================================
+    # ERROR HANDLERS
+    # ========================================================
+
     register_error_handlers(app)
+
+    print("=" * 60)
+    print("✅ Tirsi POS application initialized")
+    print("=" * 60)
 
     return app
 
 
-# ==================================================
+# ============================================================
 # EXTENSION INITIALIZATION
-# ==================================================
+# ============================================================
 
 def initialize_extensions(app):
 
-    # Database
-    db.init_app(app)
+    # ========================================================
+    # DATABASE
+    # ========================================================
 
-    # Migrations
-    migrate.init_app(
-        app,
-        db
-    )
+    try:
 
-    # ==============================================
+        db.init_app(app)
+
+        print("✅ SQLAlchemy initialized")
+
+    except Exception as e:
+
+        print("❌ SQLAlchemy initialization failed")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
+    # MIGRATIONS
+    # ========================================================
+
+    try:
+
+        migrate.init_app(
+            app,
+            db
+        )
+
+        print("✅ Flask-Migrate initialized")
+
+    except Exception as e:
+
+        print("❌ Flask-Migrate initialization failed")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
     # CORS
-    # ==============================================
+    # ========================================================
 
     allowed_origins = app.config.get(
         "CORS_ORIGINS",
         []
     )
 
-    CORS(
-        app,
+    # Handle accidental string configuration
+    # such as:
+    #
+    # CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+    #
+    if isinstance(allowed_origins, str):
 
-        origins=allowed_origins,
+        allowed_origins = [
+            origin.strip()
+            for origin in allowed_origins.split(",")
+            if origin.strip()
+        ]
 
-        supports_credentials=True,
-
-        allow_headers=[
-            "Content-Type",
-            "Authorization",
-            "X-Shop-ID",
-            "X-Requested-With",
-            "Accept",
-            "Origin",
-            "Access-Control-Request-Method",
-            "Access-Control-Request-Headers",
-            "Cookie"
-        ],
-
-        methods=[
-            "GET",
-            "POST",
-            "PUT",
-            "PATCH",
-            "DELETE",
-            "OPTIONS"
-        ],
-
-        expose_headers=[
-            "Content-Type",
-            "X-Requested-With"
-        ],
-
-        max_age=86400
+    print(
+        f"🌐 CORS origins: "
+        f"{allowed_origins}"
     )
 
-    # Server-side sessions
-    Session(app)
+    try:
 
-    # Flask-Login
-    login_manager.init_app(app)
+        CORS(
+            app,
 
-    # Bcrypt
-    bcrypt.init_app(app)
+            origins=allowed_origins,
 
-    # ==============================================
-    # TEST DATABASE CONNECTION
-    # ==============================================
+            supports_credentials=True,
 
-    with app.app_context():
+            allow_headers=[
+                "Content-Type",
+                "Authorization",
+                "X-Shop-ID",
+                "X-Requested-With",
+                "Accept",
+                "Origin",
+                "Access-Control-Request-Method",
+                "Access-Control-Request-Headers",
+                "Cookie"
+            ],
 
-        try:
+            methods=[
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+            ],
 
-            db.session.execute(
+            expose_headers=[
+                "Content-Type",
+                "X-Requested-With"
+            ],
+
+            max_age=86400
+        )
+
+        print("✅ CORS initialized")
+
+    except Exception as e:
+
+        print("❌ CORS initialization failed")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
+    # SERVER-SIDE SESSION
+    # ========================================================
+
+    try:
+
+        Session(app)
+
+        print("✅ Flask-Session initialized")
+
+    except Exception as e:
+
+        print("❌ Flask-Session initialization failed")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
+    # FLASK LOGIN
+    # ========================================================
+
+    try:
+
+        login_manager.init_app(app)
+
+        print("✅ Flask-Login initialized")
+
+    except Exception as e:
+
+        print("❌ Flask-Login initialization failed")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
+    # BCRYPT
+    # ========================================================
+
+    try:
+
+        bcrypt.init_app(app)
+
+        print("✅ Bcrypt initialized")
+
+    except Exception as e:
+
+        print("❌ Bcrypt initialization failed")
+
+        traceback.print_exc()
+
+        raise e
+
+    # ========================================================
+    # DATABASE CONNECTION TEST
+    # ========================================================
+
+    test_database_connection(app)
+
+
+# ============================================================
+# DATABASE CONNECTION TEST
+# ============================================================
+
+def test_database_connection(app):
+
+    print("=" * 60)
+    print("🔍 Testing MySQL database connection...")
+    print("=" * 60)
+
+    try:
+
+        with app.app_context():
+
+            # Execute a simple query
+            result = db.session.execute(
                 text("SELECT 1")
             )
 
-            print(
-                "✅ MySQL database connected"
+            result.scalar()
+
+            # Get database information
+            database_result = db.session.execute(
+                text("SELECT DATABASE()")
             )
 
-        except Exception as e:
+            database_name = database_result.scalar()
 
-            print(
-                f"❌ Database connection failed: {e}"
+            # Get MySQL server version
+            version_result = db.session.execute(
+                text("SELECT VERSION()")
             )
 
+            mysql_version = version_result.scalar()
 
-# ==================================================
-# FLASK-LOGIN SETUP
-# ==================================================
+            print(
+                "✅ MySQL database connected successfully"
+            )
+
+            print(
+                f"✅ Active database: "
+                f"{database_name}"
+            )
+
+            print(
+                f"✅ MySQL version: "
+                f"{mysql_version}"
+            )
+
+    except Exception as e:
+
+        print("=" * 60)
+
+        print(
+            "❌ DATABASE CONNECTION FAILED"
+        )
+
+        print(
+            f"Error type: "
+            f"{type(e).__name__}"
+        )
+
+        print(
+            f"Error message: "
+            f"{str(e)}"
+        )
+
+        print("=" * 60)
+
+        # IMPORTANT:
+        # Print complete traceback so Render logs show
+        # the exact line causing the problem.
+
+        traceback.print_exc()
+
+        print("=" * 60)
+
+        # Roll back failed SQLAlchemy transaction
+
+        try:
+
+            db.session.rollback()
+
+        except Exception:
+
+            pass
+
+
+# ============================================================
+# FLASK LOGIN SETUP
+# ============================================================
 
 def setup_login_manager(app):
 
     login_manager.session_protection = "strong"
+
+    # ========================================================
+    # USER LOADER
+    # ========================================================
 
     @login_manager.user_loader
     def load_user(user_id):
 
         try:
 
-            # ======================================
+            # ==================================================
             # ADMIN USER
-            # ======================================
+            # ==================================================
 
-            if user_id == "1":
+            if str(user_id) == "1":
 
                 return AdminUser(
                     app.config["ADMIN_EMAIL"]
                 )
 
-            # ======================================
+            # ==================================================
             # SHOP USER
-            # ======================================
+            # ==================================================
 
             shop_id = int(user_id)
 
@@ -229,6 +521,7 @@ def setup_login_manager(app):
             )
 
             if shop:
+
                 return shop
 
         except Exception as e:
@@ -237,7 +530,15 @@ def setup_login_manager(app):
                 f"User loading error: {e}"
             )
 
+            app.logger.exception(
+                "Full user loading traceback:"
+            )
+
         return None
+
+    # ========================================================
+    # UNAUTHORIZED HANDLER
+    # ========================================================
 
     @login_manager.unauthorized_handler
     def unauthorized_handler():
@@ -247,72 +548,107 @@ def setup_login_manager(app):
         }), 401
 
 
-# ==================================================
+# ============================================================
 # CORE ROUTES
-# ==================================================
+# ============================================================
 
 def register_core_routes(app):
 
-    # ==============================================
+    # ========================================================
     # HEALTH CHECK
-    # ==============================================
+    # ========================================================
 
-    @app.route("/health")
+    @app.route(
+        "/health",
+        methods=["GET"]
+    )
     def health():
 
         try:
 
-            db.session.execute(
-                text("SELECT 1")
-            )
+            with db.engine.connect() as connection:
+
+                connection.execute(
+                    text("SELECT 1")
+                )
 
             database = "connected"
 
+            database_error = None
+
         except Exception as e:
 
-            database = str(e)
+            database = "disconnected"
 
-        return jsonify({
+            database_error = str(e)
+
+        response = {
 
             "status": "healthy",
 
             "database": database,
 
             "environment":
-                app.config["ENV"],
+                app.config.get(
+                    "ENV"
+                ),
 
-            "admin":
-                app.config["ADMIN_EMAIL"]
+            "application":
+                app.config.get(
+                    "APP_NAME"
+                )
 
-        })
+        }
 
+        # Do not expose sensitive database details
+        # in the public health response.
 
-    # ==============================================
+        if database_error:
+
+            response["database_error"] = database_error
+
+        return jsonify(response), 200
+
+    # ========================================================
     # ROOT
-    # ==============================================
+    # ========================================================
 
-    @app.route("/")
+    @app.route(
+        "/",
+        methods=["GET"]
+    )
     def index():
 
         return jsonify({
 
             "name":
-                app.config["APP_NAME"],
+                app.config.get(
+                    "APP_NAME",
+                    "Tirsi POS"
+                ),
 
             "status":
                 "running",
 
             "version":
-                "1.0.0"
+                "1.0.0",
 
-        })
+            "environment":
+                app.config.get(
+                    "ENV",
+                    "development"
+                )
 
+        }), 200
 
-    # ==============================================
+    # ========================================================
     # UPLOADS
-    # ==============================================
+    # ========================================================
 
-    @app.route("/uploads/<filename>")
+    @app.route(
+        "/uploads/<path:filename>",
+        methods=["GET"]
+    )
     def uploads(filename):
 
         upload_folder = os.path.join(
@@ -325,10 +661,9 @@ def register_core_routes(app):
             filename
         )
 
-
-    # ==============================================
+    # ========================================================
     # SESSION CHECK
-    # ==============================================
+    # ========================================================
 
     @app.route(
         "/api/auth/session-check",
@@ -336,72 +671,100 @@ def register_core_routes(app):
     )
     def session_check():
 
-        app.logger.debug(
-            "Session check - "
-            f"Authenticated: "
-            f"{current_user.is_authenticated}"
-        )
+        try:
 
-        app.logger.debug(
-            f"Session data: "
-            f"{dict(session) if session else 'No session'}"
-        )
+            app.logger.debug(
+                "Session check - "
+                f"Authenticated: "
+                f"{current_user.is_authenticated}"
+            )
 
-        app.logger.debug(
-            f"Cookies: "
-            f"{request.cookies.to_dict()}"
-        )
+            if session:
 
-        if current_user.is_authenticated:
+                app.logger.debug(
+                    f"Session keys: "
+                    f"{list(session.keys())}"
+                )
 
-            user_data = {
+            app.logger.debug(
+                f"Cookies received: "
+                f"{list(request.cookies.keys())}"
+            )
 
-                "id":
-                    current_user.get_id(),
+            # ==================================================
+            # AUTHENTICATED
+            # ==================================================
 
-                "email":
-                    getattr(
-                        current_user,
-                        "email",
-                        None
-                    ),
+            if current_user.is_authenticated:
 
-                "username":
-                    getattr(
-                        current_user,
-                        "username",
-                        None
-                    ),
+                user_data = {
 
-                "is_admin":
-                    getattr(
-                        current_user,
-                        "is_admin",
-                        False
-                    )
+                    "id":
+                        current_user.get_id(),
 
-            }
+                    "email":
+                        getattr(
+                            current_user,
+                            "email",
+                            None
+                        ),
+
+                    "username":
+                        getattr(
+                            current_user,
+                            "username",
+                            None
+                        ),
+
+                    "is_admin":
+                        getattr(
+                            current_user,
+                            "is_admin",
+                            False
+                        )
+
+                }
+
+                return jsonify({
+
+                    "authenticated": True,
+
+                    "user": user_data
+
+                }), 200
+
+            # ==================================================
+            # NOT AUTHENTICATED
+            # ==================================================
 
             return jsonify({
 
-                "authenticated": True,
+                "authenticated": False
 
-                "user": user_data
+            }), 401
 
-            }), 200
+        except Exception as e:
 
-        return jsonify({
+            app.logger.exception(
+                "Session check failed"
+            )
 
-            "authenticated": False
+            return jsonify({
 
-        }), 401
+                "authenticated": False,
 
+                "error": "Session check failed"
 
-    # ==============================================
-    # TEST AUTH
-    # ==============================================
+            }), 500
 
-    @app.route("/api/test-auth")
+    # ========================================================
+    # TEST AUTHENTICATION
+    # ========================================================
+
+    @app.route(
+        "/api/test-auth",
+        methods=["GET"]
+    )
     @login_required
     def test_auth():
 
@@ -420,14 +783,18 @@ def register_core_routes(app):
                     False
                 )
 
-        })
+        }), 200
 
 
-# ==================================================
+# ============================================================
 # ERROR HANDLERS
-# ==================================================
+# ============================================================
 
 def register_error_handlers(app):
+
+    # ========================================================
+    # 401
+    # ========================================================
 
     @app.errorhandler(401)
     def unauthorized(error):
@@ -439,6 +806,9 @@ def register_error_handlers(app):
 
         }), 401
 
+    # ========================================================
+    # 404
+    # ========================================================
 
     @app.errorhandler(404)
     def not_found(error):
@@ -450,6 +820,9 @@ def register_error_handlers(app):
 
         }), 404
 
+    # ========================================================
+    # 500
+    # ========================================================
 
     @app.errorhandler(500)
     def server_error(error):
@@ -466,9 +839,9 @@ def register_error_handlers(app):
         }), 500
 
 
-# ==================================================
+# ============================================================
 # CREATE APPLICATION
-# ==================================================
+# ============================================================
 
 app = create_app(
     os.getenv(
@@ -478,9 +851,9 @@ app = create_app(
 )
 
 
-# ==================================================
+# ============================================================
 # LOCAL DEVELOPMENT
-# ==================================================
+# ============================================================
 
 if __name__ == "__main__":
 
@@ -495,6 +868,9 @@ if __name__ == "__main__":
             )
         ),
 
-        debug=app.config["DEBUG"]
+        debug=app.config.get(
+            "DEBUG",
+            False
+        )
 
     )
