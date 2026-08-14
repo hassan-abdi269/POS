@@ -1,18 +1,13 @@
 # routes/shop.py
 
 from flask import request, jsonify, current_app
-from flask_login import (
-    login_required,
-    login_user,
-    logout_user,
-    current_user
-)
+from flask_login import login_required, login_user, logout_user, current_user
 from sqlalchemy import or_
 from datetime import datetime
+import re
 
 from models.shop import Shop
 from extensions import db
-
 
 # =====================================================
 # HELPERS
@@ -25,13 +20,12 @@ def admin_required():
     """
     if not current_user.is_authenticated:
         return False
-
     return getattr(current_user, "is_admin", False)
 
 
 def shop_response(shop):
     """
-    Safe shop response formatter.
+    Safe shop response formatter with all necessary fields.
     """
     return {
         "id": shop.id,
@@ -51,8 +45,66 @@ def shop_response(shop):
         "lastActive": (
             shop.last_active.strftime("%Y-%m-%d %H:%M")
             if shop.last_active else None
+        ),
+        "updatedAt": (
+            shop.updated_at.strftime("%Y-%m-%d %H:%M")
+            if shop.updated_at else None
         )
     }
+
+
+def get_allowed_origins():
+    """Helper to get and normalize allowed origins"""
+    allowed_origins = current_app.config.get("CORS_ORIGINS", [])
+    
+    if isinstance(allowed_origins, str):
+        allowed_origins = [
+            item.strip().rstrip('/')
+            for item in allowed_origins.split(",")
+            if item.strip()
+        ]
+    elif isinstance(allowed_origins, (list, tuple, set)):
+        allowed_origins = [
+            str(item).strip().rstrip('/')
+            for item in allowed_origins
+            if str(item).strip()
+        ]
+    else:
+        allowed_origins = []
+    
+    # Always add production frontend
+    PRODUCTION_FRONTEND = "https://pos-frontend-j0hd.onrender.com"
+    if PRODUCTION_FRONTEND not in allowed_origins:
+        allowed_origins.append(PRODUCTION_FRONTEND)
+    
+    # Add local development origins
+    LOCAL_ORIGINS = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://localhost:5174"
+    ]
+    
+    for local_origin in LOCAL_ORIGINS:
+        if local_origin not in allowed_origins:
+            allowed_origins.append(local_origin)
+    
+    return list(dict.fromkeys(allowed_origins))
+
+
+def set_cors_headers(response, origin):
+    """Helper to set CORS headers on response"""
+    if origin:
+        allowed_origins = get_allowed_origins()
+        origin_normalized = origin.rstrip('/')
+        
+        if origin_normalized in allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin_normalized
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Vary"] = "Origin"
+    
+    return response
 
 
 # =====================================================
@@ -61,1379 +113,462 @@ def shop_response(shop):
 
 def init_shop_routes(app):
 
+    # =================================================
+    # SHOP LOGIN - WITH COMPLETE CORS FIX
+    # =================================================
+
+    @app.route("/api/shop/login", methods=["POST", "OPTIONS"])
+    def shop_login():
+        """
+        Shop login endpoint with complete CORS support.
+        """
+        
+        # =================================================
+        # CORS PREFLIGHT REQUEST
+        # =================================================
+        
+        if request.method == "OPTIONS":
+            response = jsonify({
+                "success": True,
+                "message": "CORS preflight successful"
+            })
+            
+            # Get the requesting origin
+            origin = request.headers.get("Origin")
+            
+            if origin:
+                allowed_origins = get_allowed_origins()
+                origin_normalized = origin.rstrip('/')
+                
+                if origin_normalized in allowed_origins:
+                    response.headers["Access-Control-Allow-Origin"] = origin_normalized
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
+                    response.headers["Access-Control-Allow-Headers"] = (
+                        "Content-Type, Authorization, X-Shop-ID, "
+                        "X-Requested-With, Accept, Origin, "
+                        "Access-Control-Request-Method, "
+                        "Access-Control-Request-Headers, Cookie"
+                    )
+                    response.headers["Access-Control-Allow-Methods"] = (
+                        "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+                    )
+                    response.headers["Access-Control-Max-Age"] = "86400"
+                    response.headers["Vary"] = "Origin"
+                    
+                    current_app.logger.info(f"✅ CORS preflight allowed for: {origin_normalized}")
+                else:
+                    current_app.logger.warning(f"⚠️ CORS preflight blocked for: {origin_normalized}")
+            
+            return response, 200
+        
+        # =================================================
+        # NORMAL SHOP LOGIN
+        # =================================================
+        
+        try:
+            # Get origin for CORS headers
+            origin = request.headers.get("Origin")
+            
+            # Validate Content-Type
+            if not request.is_json:
+                return jsonify({
+                    "success": False,
+                    "error": "Content-Type must be application/json"
+                }), 400
+            
+            # Get request data
+            data = request.get_json()
+            
+            if not data:
+                return jsonify({
+                    "success": False,
+                    "error": "No data provided"
+                }), 400
+            
+            # Extract and validate credentials
+            email = data.get("email", "").lower().strip()
+            password = data.get("password")
+            
+            if not email or not password:
+                return jsonify({
+                    "success": False,
+                    "error": "Email and password are required"
+                }), 400
+            
+            # Find shop by email
+            shop = Shop.query.filter_by(email=email).first()
+            
+            # Check if shop exists
+            if not shop:
+                current_app.logger.warning(f"❌ Login attempt with non-existent email: {email}")
+                return jsonify({
+                    "success": False,
+                    "error": "Invalid email or password"
+                }), 401
+            
+            # Check if shop is active
+            if shop.status != "active":
+                current_app.logger.warning(f"❌ Login attempt on inactive shop: {email}")
+                return jsonify({
+                    "success": False,
+                    "error": "Shop account is inactive. Please contact support."
+                }), 403
+            
+            # Verify password
+            if not shop.check_password(password):
+                current_app.logger.warning(f"❌ Failed login attempt for: {email}")
+                return jsonify({
+                    "success": False,
+                    "error": "Invalid email or password"
+                }), 401
+            
+            # Update last active timestamp
+            shop.last_active = datetime.utcnow()
+            db.session.commit()
+            
+            # Login the user
+            login_user(shop, remember=True)
+            
+            # Log successful login
+            current_app.logger.info(f"✅ Shop login successful: {shop.email}")
+            
+            # Prepare response
+            response_data = {
+                "success": True,
+                "message": "Login successful",
+                "shop": shop_response(shop),
+                "user": {
+                    "id": shop.id,
+                    "email": shop.email,
+                    "name": shop.name,
+                    "owner": shop.owner,
+                    "is_admin": False,
+                    "role": "shop_owner"
+                }
+            }
+            
+            response = jsonify(response_data), 200
+            
+            # Add CORS headers
+            if origin:
+                response = set_cors_headers(response, origin)
+            
+            return response
+            
+        except Exception as e:
+            current_app.logger.error(f"❌ Shop login error: {str(e)}")
+            current_app.logger.exception("Full login traceback:")
+            
+            return jsonify({
+                "success": False,
+                "error": "Login failed. Please try again."
+            }), 500
 
     # =================================================
-    # GET ALL SHOPS
+    # GET ALL SHOPS (Admin Only)
     # =================================================
 
-    @app.route("/api/shops", methods=["GET"])
+    @app.route("/api/shops", methods=["GET", "OPTIONS"])
     @login_required
     def get_shops():
-
+        """
+        Get all shops with optional filtering.
+        Admin access required.
+        """
+        # Handle CORS preflight
+        if request.method == "OPTIONS":
+            return handle_cors_preflight()
+        
         try:
-
             if not admin_required():
                 return jsonify({
                     "success": False,
                     "error": "Admin access required"
                 }), 403
 
-
+            # Get query parameters
             status = request.args.get("status")
             subscription = request.args.get("subscription")
             search = request.args.get("search", "").strip()
+            page = request.args.get("page", 1, type=int)
+            per_page = request.args.get("per_page", 20, type=int)
 
-
+            # Build query
             query = Shop.query
 
-
+            # Apply filters
             if status and status != "all":
-                query = query.filter(
-                    Shop.status == status
-                )
-
+                query = query.filter(Shop.status == status)
 
             if subscription and subscription != "all":
-                query = query.filter(
-                    Shop.subscription == subscription
-                )
-
+                query = query.filter(Shop.subscription == subscription)
 
             if search:
-
                 query = query.filter(
                     or_(
-                        Shop.name.ilike(
-                            f"%{search}%"
-                        ),
-                        Shop.email.ilike(
-                            f"%{search}%"
-                        ),
-                        Shop.owner.ilike(
-                            f"%{search}%"
-                        )
+                        Shop.name.ilike(f"%{search}%"),
+                        Shop.email.ilike(f"%{search}%"),
+                        Shop.owner.ilike(f"%{search}%"),
+                        Shop.phone.ilike(f"%{search}%")
                     )
                 )
 
-
-            shops = query.order_by(
+            # Paginate results
+            paginated = query.order_by(
                 Shop.created_at.desc()
-            ).all()
-
+            ).paginate(page=page, per_page=per_page, error_out=False)
 
             return jsonify({
-
                 "success": True,
-
-                "shops": [
-                    shop_response(shop)
-                    for shop in shops
-                ],
-
-                "total": len(shops)
-
+                "shops": [shop_response(shop) for shop in paginated.items],
+                "total": paginated.total,
+                "page": page,
+                "per_page": per_page,
+                "pages": paginated.pages
             }), 200
 
-
         except Exception as e:
-
-            current_app.logger.error(
-                f"Get shops error: {str(e)}"
-            )
-
+            current_app.logger.error(f"Get shops error: {str(e)}")
+            current_app.logger.exception("Full get shops traceback:")
             return jsonify({
-
                 "success": False,
                 "error": "Failed to fetch shops"
-
             }), 500
 
-
-
     # =================================================
-    # GET SINGLE SHOP
+    # GET SHOP STATISTICS (Admin Only)
     # =================================================
 
-    @app.route(
-        "/api/shops/<int:shop_id>",
-        methods=["GET"]
-    )
-    @login_required
-    def get_shop(shop_id):
-
-        try:
-
-            if not admin_required():
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "Admin access required"
-
-                }), 403
-
-
-            shop = Shop.query.get(shop_id)
-
-
-            if not shop:
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "Shop not found"
-
-                }), 404
-
-
-            return jsonify({
-
-                "success": True,
-                "shop": shop_response(shop)
-
-            }), 200
-
-
-
-        except Exception as e:
-
-            current_app.logger.error(
-                f"Get shop error: {str(e)}"
-            )
-
-            return jsonify({
-
-                "success": False,
-                "error": "Failed to fetch shop"
-
-            }), 500
-
-
-
-    # =================================================
-    # CREATE SHOP
-    # =================================================
-
-    @app.route(
-        "/api/shops",
-        methods=["POST"]
-    )
-    @login_required
-    def create_shop():
-
-        try:
-
-            if not admin_required():
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "Admin access required"
-
-                }), 403
-
-
-
-            data = request.get_json()
-
-
-            if not data:
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "No data provided"
-
-                }), 400
-
-
-
-            required = [
-
-                "name",
-                "email",
-                "phone",
-                "owner",
-                "password"
-
-            ]
-
-
-            missing = [
-
-                field
-                for field in required
-                if not data.get(field)
-
-            ]
-
-
-            if missing:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    f"Missing fields: {', '.join(missing)}"
-
-                }), 400
-
-
-
-            email = data["email"].lower().strip()
-
-
-
-            if not Shop.validate_email(email):
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "Invalid email format"
-
-                }), 400
-
-
-
-            if not Shop.validate_phone(
-                data["phone"]
-            ):
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "Invalid phone number"
-
-                }), 400
-
-
-
-            if len(data["password"]) < 6:
-
-                return jsonify({
-
-                    "success": False,
-                    "error":
-                    "Password must be at least 6 characters"
-
-                }), 400
-
-
-
-            existing = Shop.query.filter_by(
-                email=email
-            ).first()
-
-
-
-            if existing:
-
-                return jsonify({
-
-                    "success": False,
-                    "error":
-                    "Email already registered"
-
-                }), 400
-
-
-
-
-            shop = Shop(
-
-                name=data["name"],
-
-                email=email,
-
-                phone=data["phone"],
-
-                address=data.get(
-                    "address",
-                    ""
-                ),
-
-                owner=data["owner"],
-
-                subscription=data.get(
-                    "subscription",
-                    "basic"
-                ),
-
-                status="active",
-
-                password=data["password"],
-
-                revenue=0,
-
-                users_count=0
-
-            )
-
-
-
-            db.session.add(shop)
-
-            db.session.commit()
-
-
-
-            current_app.logger.info(
-
-                f"Shop created: {shop.name}"
-
-            )
-
-
-
-            return jsonify({
-
-                "success": True,
-
-                "message":
-                "Shop created successfully",
-
-                "shop":
-                shop_response(shop)
-
-            }), 201
-
-
-
-        except ValueError as e:
-
-            db.session.rollback()
-
-            return jsonify({
-
-                "success": False,
-                "error": str(e)
-
-            }), 400
-
-
-
-        except Exception as e:
-
-            db.session.rollback()
-
-            current_app.logger.error(
-
-                f"Create shop error: {str(e)}"
-
-            )
-
-
-            return jsonify({
-
-                "success": False,
-                "error":
-                "Failed to create shop"
-
-            }), 500
-
-                # =================================================
-    # UPDATE SHOP
-    # =================================================
-
-    @app.route(
-        "/api/shops/<int:shop_id>",
-        methods=["PUT"]
-    )
-    @login_required
-    def update_shop(shop_id):
-
-        try:
-
-            if not admin_required():
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "Admin access required"
-
-                }), 403
-
-
-
-            data = request.get_json()
-
-
-            if not data:
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "No data provided"
-
-                }), 400
-
-
-
-            shop = Shop.query.get(shop_id)
-
-
-
-            if not shop:
-
-                return jsonify({
-
-                    "success": False,
-                    "error": "Shop not found"
-
-                }), 404
-
-
-
-            if "name" in data:
-
-                shop.name = data["name"]
-
-
-
-            if "email" in data:
-
-                email = data["email"].lower().strip()
-
-
-                if not Shop.validate_email(email):
-
-                    return jsonify({
-
-                        "success": False,
-                        "error": "Invalid email format"
-
-                    }), 400
-
-
-
-                existing = Shop.query.filter(
-
-                    Shop.email == email,
-
-                    Shop.id != shop_id
-
-                ).first()
-
-
-
-                if existing:
-
-                    return jsonify({
-
-                        "success": False,
-                        "error":
-                        "Email already in use"
-
-                    }), 400
-
-
-
-                shop.email = email
-
-
-
-            if "phone" in data:
-
-                if not Shop.validate_phone(
-                    data["phone"]
-                ):
-
-                    return jsonify({
-
-                        "success": False,
-                        "error":
-                        "Invalid phone number"
-
-                    }), 400
-
-
-                shop.phone = data["phone"]
-
-
-
-            if "address" in data:
-
-                shop.address = data["address"]
-
-
-
-            if "owner" in data:
-
-                shop.owner = data["owner"]
-
-
-
-            if "subscription" in data:
-
-                shop.subscription = data["subscription"]
-
-
-
-            if data.get("password"):
-
-                if len(data["password"]) < 6:
-
-                    return jsonify({
-
-                        "success": False,
-
-                        "error":
-                        "Password must be at least 6 characters"
-
-                    }), 400
-
-
-                shop.set_password(
-                    data["password"]
-                )
-
-
-
-            shop.updated_at = datetime.utcnow()
-
-
-            db.session.commit()
-
-
-
-            return jsonify({
-
-                "success": True,
-
-                "message":
-                "Shop updated successfully",
-
-                "shop":
-                shop_response(shop)
-
-            }), 200
-
-
-
-        except ValueError as e:
-
-            db.session.rollback()
-
-            return jsonify({
-
-                "success": False,
-                "error": str(e)
-
-            }), 400
-
-
-
-        except Exception as e:
-
-            db.session.rollback()
-
-            current_app.logger.error(
-
-                f"Update shop error: {str(e)}"
-
-            )
-
-            return jsonify({
-
-                "success": False,
-
-                "error":
-                "Failed to update shop"
-
-            }), 500
-
-
-
-
-    # =================================================
-    # CHANGE SHOP STATUS
-    # =================================================
-
-    @app.route(
-        "/api/shops/<int:shop_id>/status",
-        methods=["PATCH"]
-    )
-    @login_required
-    def toggle_shop_status(shop_id):
-
-        try:
-
-            if not admin_required():
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Admin access required"
-
-                }), 403
-
-
-
-            data = request.get_json()
-
-
-
-            if not data or not data.get("status"):
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Status is required"
-
-                }), 400
-
-
-
-            valid_statuses = [
-
-                "active",
-                "inactive",
-                "suspended"
-
-            ]
-
-
-            status = data["status"]
-
-
-
-            if status not in valid_statuses:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Invalid status"
-
-                }), 400
-
-
-
-            shop = Shop.query.get(shop_id)
-
-
-
-            if not shop:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Shop not found"
-
-                }), 404
-
-
-
-            shop.status = status
-
-            shop.updated_at = datetime.utcnow()
-
-
-            db.session.commit()
-
-
-
-            return jsonify({
-
-                "success": True,
-
-                "message":
-                f"Shop status updated to {status}",
-
-                "shop":
-                shop_response(shop)
-
-            }), 200
-
-
-
-        except Exception as e:
-
-            db.session.rollback()
-
-            current_app.logger.error(
-
-                f"Status update error: {str(e)}"
-
-            )
-
-
-            return jsonify({
-
-                "success": False,
-
-                "error":
-                "Failed to update status"
-
-            }), 500
-
-
-
-
-    # =================================================
-    # DELETE SHOP
-    # =================================================
-
-    @app.route(
-        "/api/shops/<int:shop_id>",
-        methods=["DELETE"]
-    )
-    @login_required
-    def delete_shop(shop_id):
-
-        try:
-
-            if not admin_required():
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Admin access required"
-
-                }), 403
-
-
-
-            shop = Shop.query.get(shop_id)
-
-
-
-            if not shop:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Shop not found"
-
-                }), 404
-
-
-
-            shop_name = shop.name
-
-
-            db.session.delete(shop)
-
-            db.session.commit()
-
-
-
-            current_app.logger.info(
-
-                f"Shop deleted: {shop_name}"
-
-            )
-
-
-
-            return jsonify({
-
-                "success": True,
-
-                "message":
-                "Shop deleted successfully"
-
-            }), 200
-
-
-
-        except Exception as e:
-
-            db.session.rollback()
-
-
-            current_app.logger.error(
-
-                f"Delete shop error: {str(e)}"
-
-            )
-
-
-            return jsonify({
-
-                "success": False,
-
-                "error":
-                "Failed to delete shop"
-
-            }), 500
-
-
-
-
-    # =================================================
-    # SHOP STATISTICS
-    # =================================================
-
-    @app.route(
-        "/api/shops/stats",
-        methods=["GET"]
-    )
+    @app.route("/api/shops/stats", methods=["GET", "OPTIONS"])
     @login_required
     def get_shop_stats():
-
+        """
+        Get shop statistics for admin dashboard.
+        Admin access required.
+        """
+        # Handle CORS preflight
+        if request.method == "OPTIONS":
+            return handle_cors_preflight()
+        
         try:
-
             if not admin_required():
-
                 return jsonify({
-
                     "success": False,
-
-                    "error":
-                    "Admin access required"
-
+                    "error": "Admin access required"
                 }), 403
 
-
-
+            # Count by status
             total = Shop.query.count()
+            active = Shop.query.filter_by(status="active").count()
+            inactive = Shop.query.filter_by(status="inactive").count()
+            suspended = Shop.query.filter_by(status="suspended").count()
 
-            active = Shop.query.filter_by(
-                status="active"
-            ).count()
+            # Count by subscription
+            premium = Shop.query.filter_by(subscription="premium").count()
+            standard = Shop.query.filter_by(subscription="standard").count()
+            basic = Shop.query.filter_by(subscription="basic").count()
 
-
-            inactive = Shop.query.filter_by(
-                status="inactive"
-            ).count()
-
-
-            suspended = Shop.query.filter_by(
-                status="suspended"
-            ).count()
-
-
-
-            premium = Shop.query.filter_by(
-                subscription="premium"
-            ).count()
-
-
-            standard = Shop.query.filter_by(
-                subscription="standard"
-            ).count()
-
-
-            basic = Shop.query.filter_by(
-                subscription="basic"
-            ).count()
-
-
-
+            # Total revenue
             revenue = db.session.query(
-
-                db.func.sum(
-                    Shop.revenue
-                )
-
+                db.func.sum(Shop.revenue)
             ).scalar() or 0
 
-
+            # New shops this month
+            current_month = datetime.utcnow().replace(day=1)
+            new_this_month = Shop.query.filter(
+                Shop.created_at >= current_month
+            ).count()
 
             return jsonify({
-
                 "success": True,
-
                 "stats": {
-
                     "total": total,
-
                     "active": active,
-
                     "inactive": inactive,
-
                     "suspended": suspended,
-
                     "premium": premium,
-
                     "standard": standard,
-
                     "basic": basic,
-
-                    "totalRevenue": float(revenue)
-
+                    "totalRevenue": float(revenue),
+                    "newThisMonth": new_this_month
                 }
-
             }), 200
 
-
-
         except Exception as e:
-
-            current_app.logger.error(
-
-                f"Stats error: {str(e)}"
-
-            )
-
-
+            current_app.logger.error(f"Get shop stats error: {str(e)}")
             return jsonify({
-
                 "success": False,
-
-                "error":
-                "Failed to fetch stats"
-
+                "error": "Failed to fetch statistics"
             }), 500
-
-
-
-
-    # =================================================
-    # RESET SHOP PASSWORD
-    # =================================================
-
-    @app.route(
-        "/api/shops/<int:shop_id>/reset-password",
-        methods=["POST"]
-    )
-    @login_required
-    def reset_shop_password(shop_id):
-
-        try:
-
-            if not admin_required():
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Admin access required"
-
-                }), 403
-
-
-
-            data = request.get_json()
-
-
-
-            new_password = (
-
-                data.get("new_password")
-
-                if data else None
-
-            )
-
-
-
-            if not new_password:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "New password is required"
-
-                }), 400
-
-
-
-            if len(new_password) < 6:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Password must be at least 6 characters"
-
-                }), 400
-
-
-
-            shop = Shop.query.get(shop_id)
-
-
-
-            if not shop:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Shop not found"
-
-                }), 404
-
-
-
-            shop.set_password(
-                new_password
-            )
-
-            shop.updated_at = datetime.utcnow()
-
-
-            db.session.commit()
-
-
-
-            return jsonify({
-
-                "success": True,
-
-                "message":
-                "Password reset successfully"
-
-            }), 200
-
-
-
-        except Exception as e:
-
-            db.session.rollback()
-
-
-            current_app.logger.error(
-
-                f"Password reset error: {str(e)}"
-
-            )
-
-
-            return jsonify({
-
-                "success": False,
-
-                "error":
-                "Failed to reset password"
-
-            }), 500
-
-
-
-
-                # =================================================
-    # SHOP LOGIN
-    # =================================================
-
-    @app.route(
-        "/api/shop/login",
-        methods=["POST", "OPTIONS"]
-    )
-    def shop_login():
-
-        if request.method == "OPTIONS":
-
-            response = jsonify({
-                "success": True
-            })
-
-            response.headers.add(
-                "Access-Control-Allow-Origin",
-                "http://localhost:5173"
-            )
-
-            response.headers.add(
-                "Access-Control-Allow-Headers",
-                "Content-Type,Authorization"
-            )
-
-            response.headers.add(
-                "Access-Control-Allow-Methods",
-                "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-            )
-
-            response.headers.add(
-                "Access-Control-Allow-Credentials",
-                "true"
-            )
-
-            return response, 200
-
-
-
-        try:
-
-            if not request.is_json:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Content-Type must be application/json"
-
-                }), 400
-
-
-
-            data = request.get_json()
-
-
-            email = (
-                data.get("email","")
-                .lower()
-                .strip()
-            )
-
-            password = data.get(
-                "password"
-            )
-
-
-
-            if not email or not password:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Email and password required"
-
-                }), 400
-
-
-
-            shop = Shop.query.filter_by(
-                email=email
-            ).first()
-
-
-
-            if not shop:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Invalid credentials"
-
-                }), 401
-
-
-
-            if shop.status != "active":
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Shop account is not active"
-
-                }), 401
-
-
-
-            if not shop.check_password(
-                password
-            ):
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Invalid credentials"
-
-                }), 401
-
-
-
-            shop.last_active = datetime.utcnow()
-
-            db.session.commit()
-
-
-
-            login_user(
-                shop,
-                remember=True
-            )
-
-
-
-            current_app.logger.info(
-
-                f"Shop login: {shop.email}"
-
-            )
-
-
-
-            return jsonify({
-
-                "success": True,
-
-                "message":
-                "Login successful",
-
-                "shop":
-                shop_response(shop)
-
-            }), 200
-
-
-
-        except Exception as e:
-
-
-            current_app.logger.error(
-
-                f"Shop login error: {str(e)}"
-
-            )
-
-
-            return jsonify({
-
-                "success": False,
-
-                "error":
-                "Login failed"
-
-            }), 500
-
-
-
-
-
-    # =================================================
-    # CURRENT SHOP PROFILE
-    # =================================================
-
-    @app.route(
-        "/api/shop/me",
-        methods=["GET"]
-    )
-    @login_required
-    def get_shop_profile():
-
-        try:
-
-
-            if not isinstance(
-                current_user,
-                Shop
-            ):
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Shop account required"
-
-                }), 403
-
-
-
-            shop = Shop.query.get(
-                current_user.id
-            )
-
-
-
-            if not shop:
-
-                return jsonify({
-
-                    "success": False,
-
-                    "error":
-                    "Shop not found"
-
-                }), 404
-
-
-
-            return jsonify({
-
-                "success": True,
-
-                "shop":
-                shop_response(shop)
-
-            }), 200
-
-
-
-        except Exception as e:
-
-
-            current_app.logger.error(
-
-                f"Shop profile error: {str(e)}"
-
-            )
-
-
-            return jsonify({
-
-                "success": False,
-
-                "error":
-                "Failed to load profile"
-
-            }), 500
-
-
-
-
 
     # =================================================
     # SHOP LOGOUT
     # =================================================
 
-    @app.route(
-        "/api/shop/logout",
-        methods=["POST"]
-    )
+    @app.route("/api/shop/logout", methods=["POST", "OPTIONS"])
     @login_required
     def shop_logout():
-
+        """
+        Logout the current shop user.
+        """
+        # Handle CORS preflight
+        if request.method == "OPTIONS":
+            return handle_cors_preflight()
+        
         try:
-
+            # Get origin for CORS headers
+            origin = request.headers.get("Origin")
+            
             logout_user()
-
-
-            return jsonify({
-
+            
+            response = jsonify({
                 "success": True,
-
-                "message":
-                "Logged out successfully"
-
+                "message": "Logged out successfully"
             }), 200
-
-
+            
+            # Add CORS headers
+            if origin:
+                response = set_cors_headers(response, origin)
+            
+            return response
 
         except Exception as e:
-
-
-            current_app.logger.error(
-
-                f"Shop logout error: {str(e)}"
-
-            )
-
-
+            current_app.logger.error(f"Shop logout error: {str(e)}")
             return jsonify({
-
                 "success": False,
-
-                "error":
-                "Logout failed"
-
+                "error": "Logout failed"
             }), 500
+
+
+# =====================================================
+# CORS HELPER FUNCTION
+# =====================================================
+
+def handle_cors_preflight():
+    """Handle CORS preflight requests"""
+    response = jsonify({"success": True})
+    
+    origin = request.headers.get("Origin")
+    
+    if origin:
+        allowed_origins = get_allowed_origins()
+        origin_normalized = origin.rstrip('/')
+        
+        if origin_normalized in allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin_normalized
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, X-Shop-ID, "
+                "X-Requested-With, Accept, Origin, "
+                "Access-Control-Request-Method, "
+                "Access-Control-Request-Headers, Cookie"
+            )
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            )
+            response.headers["Access-Control-Max-Age"] = "86400"
+            response.headers["Vary"] = "Origin"
+    
+    return response, 200
+
+
+# =====================================================
+# CREATE SHOP (Admin Only)
+# =====================================================
+
+@app.route("/api/shops", methods=["POST"])
+@login_required
+def create_shop():
+    """
+    Create a new shop.
+    Admin access required.
+    """
+    try:
+        if not admin_required():
+            return jsonify({
+                "success": False,
+                "error": "Admin access required"
+            }), 403
+
+        data = request.get_json()
+
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "No data provided"
+            }), 400
+
+        # Validate required fields
+        required = ["name", "email", "phone", "owner", "password"]
+        missing = [field for field in required if not data.get(field)]
+
+        if missing:
+            return jsonify({
+                "success": False,
+                "error": f"Missing fields: {', '.join(missing)}"
+            }), 400
+
+        # Validate email
+        email = data["email"].lower().strip()
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            return jsonify({
+                "success": False,
+                "error": "Invalid email format"
+            }), 400
+
+        # Validate phone
+        phone = data["phone"].strip()
+        if len(phone) < 10:
+            return jsonify({
+                "success": False,
+                "error": "Phone number must be at least 10 digits"
+            }), 400
+
+        # Validate password
+        if len(data["password"]) < 6:
+            return jsonify({
+                "success": False,
+                "error": "Password must be at least 6 characters"
+            }), 400
+
+        # Check if email already exists
+        existing = Shop.query.filter_by(email=email).first()
+        if existing:
+            return jsonify({
+                "success": False,
+                "error": "Email already registered"
+            }), 400
+
+        # Create shop
+        shop = Shop(
+            name=data["name"].strip(),
+            email=email,
+            phone=phone,
+            address=data.get("address", "").strip(),
+            owner=data["owner"].strip(),
+            subscription=data.get("subscription", "basic"),
+            status="active",
+            password=data["password"],
+            revenue=0,
+            users_count=0
+        )
+
+        db.session.add(shop)
+        db.session.commit()
+
+        current_app.logger.info(f"✅ Shop created: {shop.name} ({shop.email})")
+
+        return jsonify({
+            "success": True,
+            "message": "Shop created successfully",
+            "shop": shop_response(shop)
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Create shop error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to create shop"
+        }), 500
