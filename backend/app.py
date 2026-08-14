@@ -61,6 +61,46 @@ def create_app(config_name="development"):
         raise e
     
     # ========================================================
+    # OVERRIDE WITH ENVIRONMENT VARIABLES
+    # ========================================================
+    
+    # Database
+    app.config["DB_HOST"] = os.getenv("DB_HOST", "localhost")
+    app.config["DB_PORT"] = int(os.getenv("DB_PORT", 3306))
+    app.config["DB_NAME"] = os.getenv("DB_NAME", "tirsi_pos_db")
+    app.config["DB_USER"] = os.getenv("DB_USER", "tirsi_user")
+    app.config["DB_PASSWORD"] = os.getenv("DB_PASSWORD", "tirsi123")
+    
+    # CORS - CRITICAL FIX
+    cors_origins = os.getenv("CORS_ORIGINS", "")
+    if cors_origins:
+        app.config["CORS_ORIGINS"] = [
+            origin.strip().rstrip('/')
+            for origin in cors_origins.split(",")
+            if origin.strip()
+        ]
+    else:
+        app.config["CORS_ORIGINS"] = [
+            "https://pos-frontend-j0hd.onrender.com",
+            "http://localhost:5173",
+            "http://localhost:3000"
+        ]
+    
+    # Admin
+    app.config["ADMIN_EMAIL"] = os.getenv("ADMIN_EMAIL", "superadmin@system.com")
+    app.config["ADMIN_PASSWORD_HASH"] = os.getenv("ADMIN_PASSWORD_HASH", "")
+    
+    # Session
+    app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "False").lower() == "true"
+    app.config["SESSION_COOKIE_HTTPONLY"] = os.getenv("SESSION_COOKIE_HTTPONLY", "True").lower() == "true"
+    app.config["SESSION_COOKIE_SAMESITE"] = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+    app.config["PERMANENT_SESSION_LIFETIME"] = int(os.getenv("PERMANENT_SESSION_LIFETIME", 86400))
+    
+    # App
+    app.config["APP_NAME"] = os.getenv("APP_NAME", "Tirsi POS")
+    app.config["API_PREFIX"] = os.getenv("API_PREFIX", "/api")
+    
+    # ========================================================
     # DISPLAY BASIC CONFIGURATION
     # ========================================================
     
@@ -86,7 +126,7 @@ def create_app(config_name="development"):
     app.config["SESSION_COOKIE_NAME"] = "session"
     app.config["SESSION_COOKIE_DOMAIN"] = None
     app.config["SESSION_COOKIE_PATH"] = "/"
-    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_HTTPONLY"] = app.config["SESSION_COOKIE_HTTPONLY"]
     app.config["SESSION_REFRESH_EACH_REQUEST"] = True
     
     # ========================================================
@@ -171,34 +211,16 @@ def initialize_extensions(app):
     # CORS - COMPLETE FIX
     # ========================================================
     
-    # Get CORS origins from environment
+    # Get allowed origins from config (already parsed from env)
     allowed_origins = app.config.get("CORS_ORIGINS", [])
     
-    # Handle string configuration
-    if isinstance(allowed_origins, str):
-        allowed_origins = [
-            origin.strip().rstrip('/')
-            for origin in allowed_origins.split(",")
-            if origin.strip()
-        ]
-    elif isinstance(allowed_origins, (list, tuple, set)):
-        allowed_origins = [
-            str(origin).strip().rstrip('/')
-            for origin in allowed_origins
-            if str(origin).strip()
-        ]
-    else:
-        allowed_origins = []
-    
-    # ========================================================
-    # ADD ALL FRONTEND ORIGINS
-    # ========================================================
-    
-    # Production frontend
+    # Ensure production frontend is always included
     PRODUCTION_FRONTEND = "https://pos-frontend-j0hd.onrender.com"
+    if PRODUCTION_FRONTEND not in allowed_origins:
+        allowed_origins.append(PRODUCTION_FRONTEND)
     
-    # Local development
-    LOCAL_FRONTENDS = [
+    # Add local development origins
+    LOCAL_ORIGINS = [
         "http://localhost:5173",
         "http://localhost:3000",
         "http://127.0.0.1:5173",
@@ -207,16 +229,11 @@ def initialize_extensions(app):
         "http://localhost:5175"
     ]
     
-    # Add production frontend
-    if PRODUCTION_FRONTEND not in allowed_origins:
-        allowed_origins.append(PRODUCTION_FRONTEND)
-    
-    # Add local frontends
-    for local_origin in LOCAL_FRONTENDS:
+    for local_origin in LOCAL_ORIGINS:
         if local_origin not in allowed_origins:
             allowed_origins.append(local_origin)
     
-    # Remove duplicates while preserving order
+    # Remove duplicates
     allowed_origins = list(dict.fromkeys(allowed_origins))
     
     print("=" * 60)
@@ -260,7 +277,7 @@ def initialize_extensions(app):
                 "DELETE",
                 "OPTIONS"
             ],
-            max_age=86400  # Cache preflight for 24 hours
+            max_age=86400
         )
         print("✅ CORS initialized successfully")
         
@@ -312,15 +329,12 @@ def test_database_connection(app):
     
     try:
         with app.app_context():
-            # Execute a simple query
             result = db.session.execute(text("SELECT 1"))
             result.scalar()
             
-            # Get database information
             database_result = db.session.execute(text("SELECT DATABASE()"))
             database_name = database_result.scalar()
             
-            # Get MySQL server version
             version_result = db.session.execute(text("SELECT VERSION()"))
             mysql_version = version_result.scalar()
             
@@ -355,11 +369,9 @@ def setup_login_manager(app):
     @login_manager.user_loader
     def load_user(user_id):
         try:
-            # Admin user
             if str(user_id) == "1":
                 return AdminUser(app.config["ADMIN_EMAIL"])
             
-            # Shop user
             shop_id = int(user_id)
             shop = Shop.query.get(shop_id)
             if shop:
