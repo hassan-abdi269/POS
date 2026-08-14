@@ -14,20 +14,19 @@ import {
   BookOpen,
   ChevronDown,
   LogOut,
-  Store
+  Store,
+  X
 } from 'lucide-react';
 
-// Import the logo
 import logo from '../assets/logo1.jpeg';
 
-const Sidebar = () => {
+const Sidebar = ({ isMobile, onClose }) => {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [shop, setShop] = useState(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   useEffect(() => {
-    // Get user data from localStorage
     const userData = localStorage.getItem('user');
     if (userData) {
       try {
@@ -37,7 +36,6 @@ const Sidebar = () => {
       }
     }
 
-    // Get shop data from localStorage
     const shopData = localStorage.getItem('shop');
     if (shopData) {
       try {
@@ -82,7 +80,6 @@ const Sidebar = () => {
     navigate('/login');
   };
 
-  // Get user initials for avatar
   const getUserInitials = () => {
     if (user) {
       const name = user.name || user.username || 'User';
@@ -103,7 +100,6 @@ const Sidebar = () => {
     return 'JD';
   };
 
-  // Get user display name
   const getDisplayName = () => {
     if (user) {
       return user.name || user.username || user.email || 'User';
@@ -114,7 +110,6 @@ const Sidebar = () => {
     return 'Guest';
   };
 
-  // Get user role
   const getUserRole = () => {
     if (user) {
       return user.role || user.user_type || 'User';
@@ -125,7 +120,6 @@ const Sidebar = () => {
     return 'User';
   };
 
-  // Get shop name
   const getShopName = () => {
     if (shop) {
       return shop.name;
@@ -133,25 +127,41 @@ const Sidebar = () => {
     return null;
   };
 
+  const handleNavClick = () => {
+    if (isMobile && onClose) {
+      onClose();
+    }
+  };
+
   return (
     <div className="w-[260px] h-full bg-white border-r border-gray-200 flex flex-col shadow-sm">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-6 border-b border-gray-200">
-        <div className="w-12 h-12 rounded-xl overflow-hidden shadow-md flex-shrink-0">
-          <img 
-            src={logo} 
-            alt="Tirsi POS Logo" 
-            className="w-full h-full object-cover"
-          />
+      <div className="flex items-center justify-between px-5 py-4 sm:py-6 border-b border-gray-200">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl overflow-hidden shadow-md flex-shrink-0">
+            <img 
+              src={logo} 
+              alt="Tirsi POS Logo" 
+              className="w-full h-full object-cover"
+            />
+          </div>
+          <div className="flex items-center">
+            <span className="font-bold text-lg sm:text-xl text-gray-900">Tirsi</span>
+            <span className="text-xs font-semibold text-white bg-gradient-to-r from-purple-600 to-indigo-600 px-2 py-0.5 rounded-full ml-1.5 sm:ml-2">POS</span>
+          </div>
         </div>
-        <div className="flex items-center">
-          <span className="font-bold text-xl text-gray-900">Tirsi</span>
-          <span className="text-xs font-semibold text-white bg-gradient-to-r from-purple-600 to-indigo-600 px-2.5 py-0.5 rounded-full ml-2">POS</span>
-        </div>
+        {isMobile && (
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-4 px-3">
+      <nav className="flex-1 overflow-y-auto py-3 sm:py-4 px-2 sm:px-3">
         <div className="mb-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">
           Main Menu
         </div>
@@ -161,8 +171,9 @@ const Sidebar = () => {
             <NavLink
               key={item.id}
               to={item.path}
+              onClick={handleNavClick}
               className={({ isActive }) =>
-                `flex items-center gap-3.5 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 mb-0.5 ${
+                `flex items-center gap-3.5 px-3 sm:px-4 py-2.5 sm:py-3 rounded-xl text-sm font-medium transition-all duration-200 mb-0.5 ${
                   isActive
                     ? 'bg-purple-50 text-purple-700 shadow-sm'
                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
@@ -176,11 +187,11 @@ const Sidebar = () => {
                       ? 'bg-purple-600 text-white shadow-md' 
                       : 'bg-gray-100 text-gray-500'
                   }`}>
-                    <Icon className="w-4 h-4" />
+                    <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   </div>
-                  <span className="flex-1">{item.label}</span>
+                  <span className="flex-1 text-sm">{item.label}</span>
                   {isActive && (
-                    <span className="w-1.5 h-8 bg-purple-600 rounded-full"></span>
+                    <span className="w-1.5 h-6 sm:h-8 bg-purple-600 rounded-full"></span>
                   )}
                 </>
               )}
@@ -190,13 +201,13 @@ const Sidebar = () => {
       </nav>
 
       {/* Bottom - User Profile & Logout */}
-      <div className="border-t border-gray-200 p-4 bg-gray-50/30">
+      <div className="border-t border-gray-200 p-3 sm:p-4 bg-gray-50/30">
         <div className="relative">
           <button
             onClick={() => setIsProfileOpen(!isProfileOpen)}
-            className="flex items-center gap-3 px-3 py-2.5 w-full rounded-xl hover:bg-white transition-all duration-200 shadow-sm hover:shadow-md"
+            className="flex items-center gap-3 px-2 sm:px-3 py-2 sm:py-2.5 w-full rounded-xl hover:bg-white transition-all duration-200 shadow-sm hover:shadow-md"
           >
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white font-semibold text-sm shadow-md flex-shrink-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white font-semibold text-xs sm:text-sm shadow-md flex-shrink-0">
               {getUserInitials()}
             </div>
             <div className="flex-1 min-w-0 text-left">

@@ -29,9 +29,23 @@ const Layout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   useEffect(() => {
-    // ✅ Use authService to get user consistently
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth < 768) {
+        setSidebarOpen(false);
+      } else {
+        setSidebarOpen(true);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
     const user = authService.getCurrentUser();
     
     console.log('🔍 Layout check - User:', user);
@@ -42,14 +56,12 @@ const Layout = () => {
       return;
     }
     
-    // Check if user is shop admin (not super admin)
     if (user.is_admin === true) {
       console.log('🔄 Super admin in shop layout - redirecting');
       navigate('/superadmin/dashboard', { replace: true });
       return;
     }
     
-    // Set shop data from user
     setShop({
       ...user,
       name: user.name || user.shopName || 'Shop',
@@ -82,7 +94,6 @@ const Layout = () => {
     { path: '/userguide', icon: BookOpen, label: 'User Guide' },
   ];
 
-  // Get shop initials for avatar
   const getShopInitials = () => {
     const name = shop?.name || 'Shop';
     const nameParts = name.split(' ');
@@ -90,6 +101,16 @@ const Layout = () => {
       return `${nameParts[0][0]}${nameParts[1][0]}`.toUpperCase();
     }
     return name.substring(0, 2).toUpperCase();
+  };
+
+  const toggleSidebar = () => {
+    setSidebarOpen(!sidebarOpen);
+  };
+
+  const closeSidebar = () => {
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
   };
 
   if (isLoading) {
@@ -108,49 +129,74 @@ const Layout = () => {
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
+      {/* Mobile Overlay */}
+      {isMobile && sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40 transition-opacity duration-300"
+          onClick={closeSidebar}
+        />
+      )}
+
       {/* Sidebar */}
-      <div className={`${
-        sidebarOpen ? 'w-64' : 'w-20'
-      } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out flex flex-col shadow-sm`}>
+      <div className={`
+        fixed md:relative z-50 h-full
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        ${isMobile && !sidebarOpen ? 'w-0' : isMobile ? 'w-64' : sidebarOpen ? 'w-64' : 'w-20'}
+        bg-white border-r border-gray-200 transition-all duration-300 ease-in-out flex flex-col shadow-sm
+        ${!sidebarOpen && !isMobile ? 'items-center' : ''}
+      `}>
         {/* Logo & Shop Name */}
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-          <div className="flex items-center gap-2 overflow-hidden">
+        <div className={`p-4 border-b border-gray-200 flex items-center ${!sidebarOpen && !isMobile ? 'justify-center' : 'justify-between'} w-full`}>
+          <div className={`flex items-center gap-2 overflow-hidden ${!sidebarOpen && !isMobile ? 'justify-center' : ''}`}>
             <div className="bg-gradient-to-br from-purple-600 to-indigo-600 p-1.5 rounded-lg flex-shrink-0">
               <Store className="h-6 w-6 text-white" />
             </div>
             {sidebarOpen && (
               <div className="min-w-0">
-                <span className="font-bold text-gray-900 block truncate">{shop.name}</span>
-                <p className="text-xs text-gray-500 truncate">POS System</p>
+                <span className="font-bold text-gray-900 block truncate text-sm md:text-base">{shop.name}</span>
+                <p className="text-xs text-gray-500 truncate hidden sm:block">POS System</p>
               </div>
             )}
           </div>
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
-          >
-            {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
+          {sidebarOpen && (
+            <button
+              onClick={toggleSidebar}
+              className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0 md:hidden"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
+          {!sidebarOpen && !isMobile && (
+            <button
+              onClick={toggleSidebar}
+              className="text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          )}
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <div className="mb-3 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            Main Menu
-          </div>
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto w-full">
+          {sidebarOpen && (
+            <div className="mb-3 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              Main Menu
+            </div>
+          )}
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
               <NavLink
                 key={item.path}
                 to={item.path}
+                onClick={closeSidebar}
                 className={({ isActive }) =>
                   `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 ${
                     isActive
                       ? 'bg-purple-50 text-purple-700 shadow-sm'
                       : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                  }`
+                  } ${!sidebarOpen && !isMobile ? 'justify-center' : ''}`
                 }
               >
                 {({ isActive }) => (
@@ -170,11 +216,11 @@ const Layout = () => {
         </nav>
 
         {/* User Profile & Logout */}
-        <div className="p-4 border-t border-gray-200 bg-gray-50/30">
-          <div className="relative">
+        <div className={`p-4 border-t border-gray-200 bg-gray-50/30 w-full ${!sidebarOpen && !isMobile ? 'flex justify-center' : ''}`}>
+          <div className="relative w-full">
             <button
               onClick={() => setIsProfileOpen(!isProfileOpen)}
-              className="flex items-center gap-3 px-3 py-2 w-full rounded-lg hover:bg-white transition-all duration-200"
+              className={`flex items-center gap-3 px-3 py-2 w-full rounded-lg hover:bg-white transition-all duration-200 ${!sidebarOpen && !isMobile ? 'justify-center' : ''}`}
             >
               <div className="w-9 h-9 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 shadow-sm">
                 {getShopInitials()}
@@ -186,7 +232,7 @@ const Layout = () => {
                 </div>
               )}
               {sidebarOpen && (
-                <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${
+                <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 flex-shrink-0 ${
                   isProfileOpen ? 'rotate-180' : ''
                 }`} />
               )}
@@ -239,37 +285,46 @@ const Layout = () => {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden w-full">
         {/* Top Bar */}
-        <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-800">
-              {shop.name}
-            </h2>
-            <p className="text-sm text-gray-500">
-              Welcome back, {shop.owner || 'Shop Owner'}! 👋
-            </p>
+        <header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-sm">
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            {/* Mobile Menu Button */}
+            <button
+              onClick={toggleSidebar}
+              className="md:hidden p-2 -ml-2 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              <Menu className="h-5 w-5 text-gray-600" />
+            </button>
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-xl font-semibold text-gray-800 truncate">
+                {shop.name}
+              </h2>
+              <p className="text-xs sm:text-sm text-gray-500 truncate hidden xs:block">
+                Welcome back, {shop.owner || 'Shop Owner'}! 👋
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="relative">
+          <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-end">
+            <div className="relative flex-1 sm:flex-none max-w-[120px] sm:max-w-[200px]">
               <input
                 type="text"
                 placeholder="Search..."
-                className="w-48 pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent bg-gray-50 hover:bg-white transition-colors"
+                className="w-full pl-8 pr-3 py-1.5 sm:py-2 text-xs sm:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent bg-gray-50 hover:bg-white transition-colors"
               />
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
             </div>
-            <button className="p-2 rounded-lg hover:bg-gray-100 transition-colors relative">
-              <Bell className="w-5 h-5 text-gray-600" />
-              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 rounded-full text-white text-[10px] flex items-center justify-center font-bold border-2 border-white">
+            <button className="p-1.5 sm:p-2 rounded-lg hover:bg-gray-100 transition-colors relative">
+              <Bell className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" />
+              <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 sm:w-4 sm:h-4 bg-red-500 rounded-full text-white text-[8px] sm:text-[10px] flex items-center justify-center font-bold border-2 border-white">
                 3
               </span>
             </button>
-            <div className="flex items-center gap-2 pl-2 border-l border-gray-200">
-              <div className="w-8 h-8 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-full flex items-center justify-center text-white font-semibold text-sm shadow-sm">
+            <div className="flex items-center gap-1 sm:gap-2 pl-1 sm:pl-2 border-l border-gray-200">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-full flex items-center justify-center text-white font-semibold text-xs sm:text-sm shadow-sm">
                 {getShopInitials()}
               </div>
-              <span className="text-sm font-medium text-gray-700 hidden md:block">
+              <span className="text-xs sm:text-sm font-medium text-gray-700 hidden xs:block">
                 {shop.owner || 'Shop Owner'}
               </span>
             </div>
@@ -277,7 +332,7 @@ const Layout = () => {
         </header>
 
         {/* Page Content */}
-        <main className="flex-1 overflow-y-auto p-6 bg-gray-50">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-6 bg-gray-50">
           <div className="max-w-7xl mx-auto">
             <Outlet />
           </div>

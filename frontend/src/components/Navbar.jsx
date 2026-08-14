@@ -10,17 +10,27 @@ import {
   Settings as SettingsIcon, 
   HelpCircle,
   Store,
-  Home
+  Home,
+  Menu
 } from 'lucide-react';
 
-const Navbar = ({ pageTitle }) => {
+const Navbar = ({ pageTitle, onMenuClick }) => {
   const navigate = useNavigate();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [user, setUser] = useState(null);
   const [shop, setShop] = useState(null);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   useEffect(() => {
-    // Get user data from localStorage
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
     const userData = localStorage.getItem('user');
     if (userData) {
       try {
@@ -30,7 +40,6 @@ const Navbar = ({ pageTitle }) => {
       }
     }
 
-    // Get shop data from localStorage
     const shopData = localStorage.getItem('shop');
     if (shopData) {
       try {
@@ -66,7 +75,6 @@ const Navbar = ({ pageTitle }) => {
     setIsDropdownOpen(!isDropdownOpen);
   };
 
-  // Get user initials for avatar
   const getUserInitials = () => {
     if (user) {
       const name = user.name || user.username || 'User';
@@ -87,7 +95,6 @@ const Navbar = ({ pageTitle }) => {
     return 'JD';
   };
 
-  // Get user display name
   const getDisplayName = () => {
     if (user) {
       return user.name || user.username || user.email || 'User';
@@ -98,7 +105,6 @@ const Navbar = ({ pageTitle }) => {
     return 'Guest';
   };
 
-  // Get user email
   const getUserEmail = () => {
     if (user) {
       return user.email || 'user@tirsi.com';
@@ -109,7 +115,6 @@ const Navbar = ({ pageTitle }) => {
     return 'guest@tirsi.com';
   };
 
-  // Get user role
   const getUserRole = () => {
     if (user) {
       return user.role || user.user_type || 'User';
@@ -120,7 +125,6 @@ const Navbar = ({ pageTitle }) => {
     return 'User';
   };
 
-  // Get greeting based on time
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good morning';
@@ -128,38 +132,49 @@ const Navbar = ({ pageTitle }) => {
     return 'Good evening';
   };
 
-  // Get display name for greeting
   const getGreetingName = () => {
     const name = getDisplayName();
     return name.split(' ')[0];
   };
 
   return (
-    <div className="flex justify-between items-center">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">{pageTitle}</h1>
-        <p className="text-sm text-gray-500 mt-0.5 flex items-center gap-2">
-          <span>{getGreeting()}, {getGreetingName()}!</span>
-          {shop && (
-            <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
-              {shop.name}
-            </span>
-          )}
-        </p>
+    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 w-full">
+      <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+        {onMenuClick && (
+          <button
+            onClick={onMenuClick}
+            className="md:hidden p-2 -ml-2 rounded-lg hover:bg-gray-100 transition-colors"
+          >
+            <Menu className="h-5 w-5 text-gray-600" />
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg sm:text-2xl font-bold text-gray-900 truncate">
+            {pageTitle}
+          </h1>
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5 flex flex-wrap items-center gap-1 sm:gap-2">
+            <span>{getGreeting()}, {getGreetingName()}!</span>
+            {shop && (
+              <span className="text-xs bg-purple-100 text-purple-700 px-1.5 sm:px-2 py-0.5 rounded-full truncate max-w-[100px] sm:max-w-none">
+                {shop.name}
+              </span>
+            )}
+          </p>
+        </div>
       </div>
-      <div className="flex items-center gap-4">
-        <div className="relative">
+      <div className="flex items-center gap-2 sm:gap-4 w-full sm:w-auto justify-end">
+        <div className="relative flex-1 sm:flex-none max-w-[120px] sm:max-w-[180px] md:max-w-[200px]">
           <input
             type="text"
-            placeholder="Search..."
-            className="w-48 pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent bg-gray-50 hover:bg-white transition-colors"
+            placeholder={isMobile ? "Search..." : "Search..."}
+            className="w-full pl-7 sm:pl-9 pr-2.5 sm:pr-4 py-1.5 sm:py-2 text-xs sm:text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent bg-gray-50 hover:bg-white transition-colors"
           />
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
         </div>
         <div className="relative">
-          <button className="p-2 rounded-lg hover:bg-gray-100 transition-colors relative">
-            <Bell className="w-5 h-5 text-gray-600" />
-            <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-red-500 rounded-full text-white text-[10px] flex items-center justify-center font-bold border-2 border-white">
+          <button className="p-1.5 sm:p-2 rounded-lg hover:bg-gray-100 transition-colors relative">
+            <Bell className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" />
+            <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 sm:w-4 sm:h-4 bg-red-500 rounded-full text-white text-[8px] sm:text-[10px] flex items-center justify-center font-bold border-2 border-white">
               3
             </span>
           </button>
@@ -169,35 +184,33 @@ const Navbar = ({ pageTitle }) => {
         <div className="relative">
           <button
             onClick={toggleDropdown}
-            className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 px-3 py-1.5 rounded-lg transition-colors"
+            className="flex items-center gap-1 sm:gap-2 cursor-pointer hover:bg-gray-100 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg transition-colors"
           >
-            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white font-semibold text-sm shadow-md">
+            <div className="w-7 h-7 sm:w-9 sm:h-9 rounded-full bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white font-semibold text-xs sm:text-sm shadow-md">
               {getUserInitials()}
             </div>
-            <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-500 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} />
           </button>
 
           {/* Dropdown Menu */}
           {isDropdownOpen && (
             <>
-              {/* Backdrop */}
               <div 
                 className="fixed inset-0 z-40" 
                 onClick={() => setIsDropdownOpen(false)}
               />
               
-              {/* Dropdown */}
-              <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-200 z-50 overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-purple-50 to-indigo-50">
-                  <p className="text-sm font-semibold text-gray-900">{getDisplayName()}</p>
-                  <p className="text-xs text-gray-500">{getUserEmail()}</p>
+              <div className="absolute right-0 mt-2 w-48 sm:w-56 bg-white rounded-xl shadow-lg border border-gray-200 z-50 overflow-hidden">
+                <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-gray-100 bg-gradient-to-r from-purple-50 to-indigo-50">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{getDisplayName()}</p>
+                  <p className="text-xs text-gray-500 truncate">{getUserEmail()}</p>
                   <span className="inline-block mt-1 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
                     {getUserRole()}
                   </span>
                   {shop && (
-                    <div className="mt-1 text-xs text-purple-600 flex items-center gap-1">
-                      <Store className="w-3 h-3" />
-                      <span>{shop.name}</span>
+                    <div className="mt-1 text-xs text-purple-600 flex items-center gap-1 truncate">
+                      <Store className="w-3 h-3 flex-shrink-0" />
+                      <span className="truncate">{shop.name}</span>
                     </div>
                   )}
                 </div>
@@ -208,9 +221,9 @@ const Navbar = ({ pageTitle }) => {
                       setIsDropdownOpen(false);
                       navigate('/settings');
                     }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    className="w-full flex items-center gap-3 px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                   >
-                    <User className="w-4 h-4 text-gray-400" />
+                    <User className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
                     <span>Profile Settings</span>
                   </button>
                   <button 
@@ -218,9 +231,9 @@ const Navbar = ({ pageTitle }) => {
                       setIsDropdownOpen(false);
                       navigate('/userguide');
                     }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    className="w-full flex items-center gap-3 px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                   >
-                    <HelpCircle className="w-4 h-4 text-gray-400" />
+                    <HelpCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
                     <span>Help & Support</span>
                   </button>
                 </div>
@@ -231,9 +244,9 @@ const Navbar = ({ pageTitle }) => {
                       setIsDropdownOpen(false);
                       handleLogout();
                     }}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors font-medium"
+                    className="w-full flex items-center gap-3 px-3 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm text-red-600 hover:bg-red-50 transition-colors font-medium"
                   >
-                    <LogOut className="w-4 h-4" />
+                    <LogOut className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     <span>Logout</span>
                   </button>
                 </div>
