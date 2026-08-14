@@ -17,6 +17,7 @@ gunicorn = "*"
 openpyxl = "*"
 reportlab = "*"
 python-docx = "*"
+python-dateutil = "*"
 
 [dev-packages]
 
