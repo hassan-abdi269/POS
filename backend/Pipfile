@@ -16,6 +16,7 @@ pymysql = "*"
 gunicorn = "*"
 openpyxl = "*"
 reportlab = "*"
+python-docx = "*"
 
 [dev-packages]
 
