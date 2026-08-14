@@ -1042,7 +1042,7 @@ const UserGuide = () => {
               <button 
                 onClick={async () => {
                   try {
-                    await fetch('http://localhost:5000/api/userguide/feedback', {
+                    await fetch('https://pos-api4.onrender.com/api/userguide/feedback', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
@@ -1064,7 +1064,7 @@ const UserGuide = () => {
               <button 
                 onClick={async () => {
                   try {
-                    await fetch('http://localhost:5000/api/userguide/feedback', {
+                    await fetch('https://pos-api4.onrender.com/api/userguide/feedback', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
