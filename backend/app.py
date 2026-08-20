@@ -2,7 +2,16 @@
 # ============================================================
 # TIRSI POS API
 # Production-ready Flask application
-# Render + Aiven/MySQL + React frontend
+#
+# Authentication:
+#   Super Admin -> /api/auth/login
+#   Shop Owner  -> /api/shop/login
+#
+# Authentication method:
+#   Flask-Login + Cookies + Flask-Session
+#
+# Deployment:
+#   Render + MySQL/Aiven
 # ============================================================
 
 import os
@@ -18,31 +27,33 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 # ============================================================
-# FLASK IMPORTS
+# FLASK
 # ============================================================
 
 from flask import (
     Flask,
     jsonify,
     request,
+    session,
 )
 
 from flask_cors import CORS
 from flask_session import Session
 
 from flask_login import (
-    login_required,
     current_user,
-    LoginManager,
-    login_user,
-    logout_user,
+    login_manager,
 )
+
+# ============================================================
+# DATABASE
+# ============================================================
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 # ============================================================
-# APPLICATION IMPORTS
+# APPLICATION EXTENSIONS
 # ============================================================
 
 from extensions import (
@@ -52,15 +63,34 @@ from extensions import (
     bcrypt,
 )
 
+# ============================================================
+# MODELS
+# ============================================================
+
 from models.shop import Shop
+
+# ============================================================
+# AUTH USER
+# ============================================================
+
 from routes.auth import AdminUser
 
+# ============================================================
+# ROUTE INITIALIZERS
+# ============================================================
+
+from routes.auth import init_auth_routes
+from routes.shop import init_shop_routes
+
 
 # ============================================================
-# CONSTANTS
+# DEFAULT FRONTEND
 # ============================================================
 
-DEFAULT_FRONTEND_URL = "https://pos-frontend-j0hd.onrender.com"
+DEFAULT_FRONTEND_URL = (
+    "https://pos-frontend-j0hd.onrender.com"
+)
+
 
 LOCAL_FRONTEND_URLS = [
     "http://localhost:5173",
@@ -71,39 +101,49 @@ LOCAL_FRONTEND_URLS = [
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# CORS ORIGINS
 # ============================================================
 
 def get_allowed_origins():
     """
-    Get allowed frontend origins from CORS_ORIGINS.
+    Read CORS_ORIGINS from .env.
 
-    Example .env:
+    Example:
 
     CORS_ORIGINS=https://pos-frontend-j0hd.onrender.com,http://localhost:5173
     """
 
-    configured_origins = os.getenv("CORS_ORIGINS", "").strip()
+    configured_origins = os.getenv(
+        "CORS_ORIGINS",
+        ""
+    ).strip()
 
     if configured_origins:
+
         origins = [
             origin.strip().rstrip("/")
             for origin in configured_origins.split(",")
             if origin.strip()
         ]
+
     else:
+
         origins = [
             DEFAULT_FRONTEND_URL,
             *LOCAL_FRONTEND_URLS,
         ]
 
-    # Remove duplicates while preserving order
+    # Remove duplicates
     return list(dict.fromkeys(origins))
 
 
+# ============================================================
+# REQUEST ORIGIN
+# ============================================================
+
 def get_request_origin():
     """
-    Return normalized Origin header.
+    Return normalized request origin.
     """
 
     origin = request.headers.get("Origin")
@@ -114,61 +154,74 @@ def get_request_origin():
     return origin.rstrip("/")
 
 
+# ============================================================
+# CORS CHECK
+# ============================================================
+
 def is_allowed_origin(origin):
     """
-    Check whether the request origin is allowed.
+    Check whether request origin is allowed.
     """
 
     if not origin:
         return False
 
-    return origin.rstrip("/") in current_app_allowed_origins()
+    origin = origin.rstrip("/")
 
+    return (
+        origin
+        in current_app_allowed_origins()
+    )
+
+
+# ============================================================
+# CURRENT APP CORS ORIGINS
+# ============================================================
 
 def current_app_allowed_origins():
     """
-    Return current configured CORS origins.
-
-    Kept as a function so routes can safely access
-    the configuration after application creation.
+    Get configured CORS origins.
     """
 
-    from flask import current_app
+    return current_app.config.get(
+        "CORS_ORIGINS",
+        []
+    )
 
-    return current_app.config.get("CORS_ORIGINS", [])
 
+# ============================================================
+# CORS RESPONSE HEADERS
+# ============================================================
 
 def add_cors_headers(response):
     """
-    Add CORS headers for the current request.
-
-    Flask-CORS handles most of this automatically,
-    but this helper ensures API responses are also
-    correct for cookie-based authentication.
+    Add CORS headers for cookie authentication.
     """
 
     origin = get_request_origin()
 
-    if origin and origin in current_app_allowed_origins():
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
+    if origin and is_allowed_origin(origin):
+
+        response.headers[
+            "Access-Control-Allow-Origin"
+        ] = origin
+
+        response.headers[
+            "Access-Control-Allow-Credentials"
+        ] = "true"
 
     response.headers["Vary"] = "Origin"
 
     return response
 
 
+# ============================================================
+# CORS PREFLIGHT
+# ============================================================
+
 def cors_options_response():
     """
-    Handle CORS preflight requests.
-
-    Browser:
-
-        OPTIONS /api/shop/login
-
-    before:
-
-        POST /api/shop/login
+    Handle OPTIONS requests.
     """
 
     response = jsonify({
@@ -178,21 +231,30 @@ def cors_options_response():
 
     origin = get_request_origin()
 
-    if origin and origin in current_app_allowed_origins():
+    if origin and is_allowed_origin(origin):
 
-        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers[
+            "Access-Control-Allow-Origin"
+        ] = origin
 
-        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers[
+            "Access-Control-Allow-Credentials"
+        ] = "true"
 
-        response.headers["Access-Control-Allow-Headers"] = (
+        response.headers[
+            "Access-Control-Allow-Headers"
+        ] = (
             "Content-Type, "
             "Authorization, "
             "X-Shop-ID, "
             "X-Requested-With, "
-            "Accept"
+            "Accept, "
+            "Origin"
         )
 
-        response.headers["Access-Control-Allow-Methods"] = (
+        response.headers[
+            "Access-Control-Allow-Methods"
+        ] = (
             "GET, "
             "POST, "
             "PUT, "
@@ -201,39 +263,100 @@ def cors_options_response():
             "OPTIONS"
         )
 
-        response.headers["Access-Control-Max-Age"] = "86400"
+        response.headers[
+            "Access-Control-Max-Age"
+        ] = "86400"
 
     response.headers["Vary"] = "Origin"
 
     return response, 204
 
 
+# ============================================================
+# SHOP SERIALIZER
+# ============================================================
+
 def serialize_shop(shop):
     """
-    Convert Shop model into JSON-safe dictionary.
+    Convert Shop object into JSON-safe dictionary.
     """
 
     return {
         "id": shop.id,
-        "name": getattr(shop, "name", None),
-        "email": getattr(shop, "email", None),
-        "phone": getattr(shop, "phone", None),
-        "address": getattr(shop, "address", None),
-        "owner": getattr(shop, "owner", None),
-        "subscription": getattr(shop, "subscription", None),
-        "status": getattr(shop, "status", None),
-        "revenue": getattr(shop, "revenue", 0),
-        "users": getattr(shop, "users_count", 0),
+
+        "name": getattr(
+            shop,
+            "name",
+            None
+        ),
+
+        "email": getattr(
+            shop,
+            "email",
+            None
+        ),
+
+        "phone": getattr(
+            shop,
+            "phone",
+            None
+        ),
+
+        "address": getattr(
+            shop,
+            "address",
+            None
+        ),
+
+        "owner": getattr(
+            shop,
+            "owner",
+            None
+        ),
+
+        "subscription": getattr(
+            shop,
+            "subscription",
+            None
+        ),
+
+        "status": getattr(
+            shop,
+            "status",
+            None
+        ),
+
+        "revenue": getattr(
+            shop,
+            "revenue",
+            0
+        ),
+
+        "users": getattr(
+            shop,
+            "users_count",
+            0
+        ),
 
         "createdAt": (
             shop.created_at.strftime("%Y-%m-%d")
-            if getattr(shop, "created_at", None)
+            if getattr(
+                shop,
+                "created_at",
+                None
+            )
             else None
         ),
 
         "lastActive": (
-            shop.last_active.strftime("%Y-%m-%d %H:%M")
-            if getattr(shop, "last_active", None)
+            shop.last_active.strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            if getattr(
+                shop,
+                "last_active",
+                None
+            )
             else None
         ),
     }
@@ -248,7 +371,7 @@ def create_app(config_name="development"):
     app = Flask(__name__)
 
     # ========================================================
-    # BASIC CONFIGURATION
+    # ENVIRONMENT
     # ========================================================
 
     environment = os.getenv(
@@ -256,168 +379,279 @@ def create_app(config_name="development"):
         config_name or "development"
     )
 
-    secret_key = os.getenv("SECRET_KEY")
+    environment = environment.lower().strip()
+
+    # ========================================================
+    # SECRET KEY
+    # ========================================================
+
+    secret_key = os.getenv(
+        "SECRET_KEY"
+    )
 
     if not secret_key:
+
         if environment == "production":
+
             raise RuntimeError(
-                "SECRET_KEY environment variable is required in production."
+                "SECRET_KEY environment variable "
+                "is required in production."
             )
 
-        secret_key = "dev-secret-key-change-in-production"
-
-    app.config["SECRET_KEY"] = secret_key
-
-    app.config["ENV"] = environment
-
-    app.config["DEBUG"] = (
-        os.getenv("DEBUG", "False").lower() == "true"
-    )
-
-    # ========================================================
-    # DATABASE CONFIGURATION
-    # ========================================================
-
-    db_host = os.getenv("DB_HOST", "localhost")
-    db_port = os.getenv("DB_PORT", "3306")
-    db_name = os.getenv("DB_NAME", "tirsi_pos_db")
-    db_user = os.getenv("DB_USER", "tirsi_user")
-    db_password = os.getenv("DB_PASSWORD", "tirsi123")
-
-    # --------------------------------------------------------
-    # Allow DATABASE_URL if supplied by Render/provider
-    # --------------------------------------------------------
-
-    database_url = os.getenv("DATABASE_URL")
-
-    if database_url:
-
-        # Render/provider may provide postgres://
-        # while SQLAlchemy requires postgresql://
-
-        if database_url.startswith("postgres://"):
-            database_url = database_url.replace(
-                "postgres://",
-                "postgresql://",
-                1
-            )
-
-        app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-
-    else:
-
-        app.config["SQLALCHEMY_DATABASE_URI"] = (
-            f"mysql+pymysql://"
-            f"{db_user}:{db_password}@"
-            f"{db_host}:{db_port}/"
-            f"{db_name}"
-            f"?charset=utf8mb4"
+        secret_key = (
+            "dev-secret-key-change-this"
         )
 
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config[
+        "SECRET_KEY"
+    ] = secret_key
 
-    # ========================================================
-    # DATABASE ENGINE OPTIONS
-    # ========================================================
+    app.config[
+        "ENV"
+    ] = environment
 
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-        "pool_pre_ping": True,
-        "pool_recycle": 280,
-        "pool_timeout": 30,
-        "max_overflow": 10,
-        "connect_args": {
-            "connect_timeout": 15,
-        },
-    }
-
-    # --------------------------------------------------------
-    # Optional Aiven SSL
-    # --------------------------------------------------------
-
-    aiven_ca = os.getenv("AIVEN_CA_PATH")
-
-    if aiven_ca and os.path.exists(aiven_ca):
-
-        app.config["SQLALCHEMY_ENGINE_OPTIONS"][
-            "connect_args"
-        ]["ssl"] = {
-            "ca": aiven_ca
-        }
-
-    # ========================================================
-    # CORS CONFIGURATION
-    # ========================================================
-
-    allowed_origins = get_allowed_origins()
-
-    app.config["CORS_ORIGINS"] = allowed_origins
-
-    # ========================================================
-    # SESSION CONFIGURATION
-    # ========================================================
-
-    app.config["SESSION_TYPE"] = "filesystem"
-
-    app.config["SESSION_PERMANENT"] = True
-
-    app.config["SESSION_USE_SIGNER"] = True
-
-    app.config["SESSION_KEY_PREFIX"] = "tirsi_"
-
-    app.config["SESSION_COOKIE_NAME"] = "session"
-
-    app.config["SESSION_COOKIE_HTTPONLY"] = True
-
-    # --------------------------------------------------------
-    # IMPORTANT FOR RENDER FRONTEND + RENDER BACKEND
-    # --------------------------------------------------------
-
-    app.config["SESSION_COOKIE_SAMESITE"] = "None"
-
-    app.config["SESSION_COOKIE_SECURE"] = (
-        environment == "production"
-    )
-
-    app.config["SESSION_REFRESH_EACH_REQUEST"] = True
-
-    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
-        days=1
-    )
-
-    # ========================================================
-    # FLASK-LOGIN COOKIE CONFIGURATION
-    # ========================================================
-
-    app.config["REMEMBER_COOKIE_HTTPONLY"] = True
-
-    app.config["REMEMBER_COOKIE_SAMESITE"] = "None"
-
-    app.config["REMEMBER_COOKIE_SECURE"] = (
-        environment == "production"
-    )
-
-    app.config["REMEMBER_COOKIE_DURATION"] = timedelta(
-        days=30
+    app.config[
+        "DEBUG"
+    ] = (
+        os.getenv(
+            "DEBUG",
+            "False"
+        ).lower()
+        == "true"
     )
 
     # ========================================================
     # ADMIN CONFIGURATION
     # ========================================================
 
-    app.config["ADMIN_EMAIL"] = os.getenv(
+    app.config[
+        "ADMIN_EMAIL"
+    ] = os.getenv(
         "ADMIN_EMAIL",
         "superadmin@system.com"
+    ).strip().lower()
+
+    app.config[
+        "ADMIN_PASSWORD_HASH"
+    ] = os.getenv(
+        "ADMIN_PASSWORD_HASH",
+        ""
+    ).strip()
+
+    # ========================================================
+    # DATABASE
+    # ========================================================
+
+    db_host = os.getenv(
+        "DB_HOST",
+        "localhost"
+    )
+
+    db_port = os.getenv(
+        "DB_PORT",
+        "3306"
+    )
+
+    db_name = os.getenv(
+        "DB_NAME",
+        "tirsi_pos_db"
+    )
+
+    db_user = os.getenv(
+        "DB_USER",
+        "tirsi_user"
+    )
+
+    db_password = os.getenv(
+        "DB_PASSWORD",
+        ""
+    )
+
+    database_url = os.getenv(
+        "DATABASE_URL",
+        ""
+    ).strip()
+
+    # --------------------------------------------------------
+    # DATABASE URL
+    # --------------------------------------------------------
+
+    if database_url:
+
+        if database_url.startswith(
+            "postgres://"
+        ):
+
+            database_url = database_url.replace(
+                "postgres://",
+                "postgresql://",
+                1
+            )
+
+        app.config[
+            "SQLALCHEMY_DATABASE_URI"
+        ] = database_url
+
+    else:
+
+        app.config[
+            "SQLALCHEMY_DATABASE_URI"
+        ] = (
+            "mysql+pymysql://"
+            f"{db_user}:"
+            f"{db_password}@"
+            f"{db_host}:"
+            f"{db_port}/"
+            f"{db_name}"
+            "?charset=utf8mb4"
+        )
+
+    app.config[
+        "SQLALCHEMY_TRACK_MODIFICATIONS"
+    ] = False
+
+    # ========================================================
+    # DATABASE ENGINE
+    # ========================================================
+
+    app.config[
+        "SQLALCHEMY_ENGINE_OPTIONS"
+    ] = {
+
+        "pool_pre_ping": True,
+
+        "pool_recycle": 280,
+
+        "pool_timeout": 30,
+
+        "max_overflow": 10,
+
+        "connect_args": {
+            "connect_timeout": 15
+        }
+    }
+
+    # ========================================================
+    # AIVEN SSL
+    # ========================================================
+
+    aiven_ca = os.getenv(
+        "AIVEN_CA_PATH"
+    )
+
+    if (
+        aiven_ca
+        and os.path.exists(aiven_ca)
+    ):
+
+        app.config[
+            "SQLALCHEMY_ENGINE_OPTIONS"
+        ][
+            "connect_args"
+        ][
+            "ssl"
+        ] = {
+            "ca": aiven_ca
+        }
+
+    # ========================================================
+    # CORS
+    # ========================================================
+
+    allowed_origins = (
+        get_allowed_origins()
+    )
+
+    app.config[
+        "CORS_ORIGINS"
+    ] = allowed_origins
+
+    # ========================================================
+    # SERVER-SIDE SESSION
+    # ========================================================
+
+    app.config[
+        "SESSION_TYPE"
+    ] = "filesystem"
+
+    app.config[
+        "SESSION_PERMANENT"
+    ] = True
+
+    app.config[
+        "SESSION_USE_SIGNER"
+    ] = True
+
+    app.config[
+        "SESSION_KEY_PREFIX"
+    ] = "tirsi_"
+
+    app.config[
+        "SESSION_COOKIE_NAME"
+    ] = "tirsi_session"
+
+    app.config[
+        "SESSION_COOKIE_HTTPONLY"
+    ] = True
+
+    # IMPORTANT:
+    # Frontend and backend are different domains on Render.
+    app.config[
+        "SESSION_COOKIE_SAMESITE"
+    ] = "None"
+
+    app.config[
+        "SESSION_COOKIE_SECURE"
+    ] = (
+        environment == "production"
+    )
+
+    app.config[
+        "SESSION_REFRESH_EACH_REQUEST"
+    ] = True
+
+    app.config[
+        "PERMANENT_SESSION_LIFETIME"
+    ] = timedelta(
+        days=1
     )
 
     # ========================================================
-    # PRINT CONFIGURATION
+    # FLASK LOGIN COOKIE
     # ========================================================
 
+    app.config[
+        "REMEMBER_COOKIE_HTTPONLY"
+    ] = True
+
+    app.config[
+        "REMEMBER_COOKIE_SAMESITE"
+    ] = "None"
+
+    app.config[
+        "REMEMBER_COOKIE_SECURE"
+    ] = (
+        environment == "production"
+    )
+
+    app.config[
+        "REMEMBER_COOKIE_DURATION"
+    ] = timedelta(
+        days=30
+    )
+
+    # ========================================================
+    # PRINT STARTUP INFORMATION
+    # ========================================================
+
+    print()
     print("=" * 70)
     print("🚀 STARTING TIRSI POS API")
     print("=" * 70)
 
-    print(f"Environment: {environment}")
+    print(
+        f"Environment: {environment}"
+    )
 
     print(
         f"Debug: {app.config['DEBUG']}"
@@ -440,13 +674,21 @@ def create_app(config_name="development"):
     )
 
     print(
-        f"Database Password: "
-        f"{'SET' if db_password else 'NOT SET'}"
+        "Database Password: "
+        + (
+            "SET"
+            if db_password
+            else "NOT SET"
+        )
     )
 
     print(
-        f"Database URL: "
-        f"{'DATABASE_URL' if database_url else 'DB_* variables'}"
+        "DATABASE_URL: "
+        + (
+            "SET"
+            if database_url
+            else "NOT SET"
+        )
     )
 
     print(
@@ -454,12 +696,28 @@ def create_app(config_name="development"):
     )
 
     print(
-        f"Session SameSite: "
+        "Admin Email: "
+        f"{app.config['ADMIN_EMAIL']}"
+    )
+
+    print(
+        "Admin Password Hash: "
+        + (
+            "SET"
+            if app.config[
+                "ADMIN_PASSWORD_HASH"
+            ]
+            else "NOT SET"
+        )
+    )
+
+    print(
+        "Session SameSite: "
         f"{app.config['SESSION_COOKIE_SAMESITE']}"
     )
 
     print(
-        f"Session Secure: "
+        "Session Secure: "
         f"{app.config['SESSION_COOKIE_SECURE']}"
     )
 
@@ -471,15 +729,22 @@ def create_app(config_name="development"):
 
     db.init_app(app)
 
-    print("✅ SQLAlchemy initialized")
+    print(
+        "✅ SQLAlchemy initialized"
+    )
 
     # ========================================================
     # INITIALIZE MIGRATIONS
     # ========================================================
 
-    migrate.init_app(app, db)
+    migrate.init_app(
+        app,
+        db
+    )
 
-    print("✅ Flask-Migrate initialized")
+    print(
+        "✅ Flask-Migrate initialized"
+    )
 
     # ========================================================
     # INITIALIZE CORS
@@ -502,12 +767,12 @@ def create_app(config_name="development"):
             "X-Shop-ID",
             "X-Requested-With",
             "Accept",
-            "Origin",
+            "Origin"
         ],
 
         expose_headers=[
             "Content-Type",
-            "Authorization",
+            "Authorization"
         ],
 
         methods=[
@@ -516,31 +781,41 @@ def create_app(config_name="development"):
             "PUT",
             "PATCH",
             "DELETE",
-            "OPTIONS",
+            "OPTIONS"
         ],
 
-        max_age=86400,
+        max_age=86400
     )
 
-    print("✅ CORS initialized")
+    print(
+        "✅ CORS initialized"
+    )
 
     # ========================================================
-    # INITIALIZE SESSION
+    # INITIALIZE FLASK SESSION
     # ========================================================
 
     Session(app)
 
-    print("✅ Flask-Session initialized")
+    print(
+        "✅ Flask-Session initialized"
+    )
 
     # ========================================================
-    # INITIALIZE FLASK-LOGIN
+    # INITIALIZE FLASK LOGIN
     # ========================================================
 
     login_manager.init_app(app)
 
+    login_manager.login_view = None
+
+    login_manager.login_message = None
+
     login_manager.session_protection = "strong"
 
-    print("✅ Flask-Login initialized")
+    print(
+        "✅ Flask-Login initialized"
+    )
 
     # ========================================================
     # INITIALIZE BCRYPT
@@ -548,10 +823,12 @@ def create_app(config_name="development"):
 
     bcrypt.init_app(app)
 
-    print("✅ Bcrypt initialized")
+    print(
+        "✅ Bcrypt initialized"
+    )
 
     # ========================================================
-    # USER LOADER
+    # FLASK LOGIN USER LOADER
     # ========================================================
 
     @login_manager.user_loader
@@ -562,33 +839,60 @@ def create_app(config_name="development"):
             if not user_id:
                 return None
 
+            user_id = str(
+                user_id
+            )
+
             # ------------------------------------------------
-            # Super Admin
+            # SUPER ADMIN
             # ------------------------------------------------
 
-            if str(user_id).startswith("admin:"):
+            if user_id.startswith(
+                "admin:"
+            ):
 
                 return AdminUser(
-                    app.config["ADMIN_EMAIL"]
+                    app.config[
+                        "ADMIN_EMAIL"
+                    ]
                 )
 
             # ------------------------------------------------
-            # Backward compatibility for admin ID 1
+            # BACKWARD COMPATIBILITY
+            # ------------------------------------------------
+            #
+            # Your old AdminUser used:
+            #
+            #     self.id = 1
+            #
+            # So existing sessions containing "1"
+            # should still work as admin.
+            #
             # ------------------------------------------------
 
-            if str(user_id) == "1":
+            if user_id == "1":
 
                 return AdminUser(
-                    app.config["ADMIN_EMAIL"]
+                    app.config[
+                        "ADMIN_EMAIL"
+                    ]
                 )
 
             # ------------------------------------------------
-            # Shop
+            # SHOP USER
             # ------------------------------------------------
 
             try:
-                shop_id = int(user_id)
-            except (ValueError, TypeError):
+
+                shop_id = int(
+                    user_id
+                )
+
+            except (
+                ValueError,
+                TypeError
+            ):
+
                 return None
 
             shop = db.session.get(
@@ -603,7 +907,8 @@ def create_app(config_name="development"):
         except Exception as e:
 
             app.logger.exception(
-                f"User loader error: {e}"
+                "User loader error: %s",
+                e
             )
 
         return None
@@ -623,689 +928,49 @@ def create_app(config_name="development"):
 
         response.status_code = 401
 
-        return add_cors_headers(response)
-
-    # ========================================================
-    # REGISTER ROUTES
-    # ========================================================
-
-    register_routes(app)
-
-    # ========================================================
-    # GLOBAL ERROR HANDLERS
-    # ========================================================
-
-    @app.errorhandler(400)
-    def bad_request(error):
-
-        response = jsonify({
-            "success": False,
-            "error": "Bad request"
-        })
-
-        return add_cors_headers(response), 400
-
-    @app.errorhandler(401)
-    def unauthorized(error):
-
-        response = jsonify({
-            "success": False,
-            "error": "Unauthorized"
-        })
-
-        return add_cors_headers(response), 401
-
-    @app.errorhandler(403)
-    def forbidden(error):
-
-        response = jsonify({
-            "success": False,
-            "error": "Forbidden"
-        })
-
-        return add_cors_headers(response), 403
-
-    @app.errorhandler(404)
-    def not_found(error):
-
-        response = jsonify({
-            "success": False,
-            "error": "Endpoint not found",
-            "path": request.path
-        })
-
-        return add_cors_headers(response), 404
-
-    @app.errorhandler(405)
-    def method_not_allowed(error):
-
-        response = jsonify({
-            "success": False,
-            "error": "Method not allowed",
-            "method": request.method,
-            "path": request.path
-        })
-
-        return add_cors_headers(response), 405
-
-    @app.errorhandler(500)
-    def server_error(error):
-
-        app.logger.exception(
-            "Unhandled server error"
+        return add_cors_headers(
+            response
         )
 
-        response = jsonify({
-            "success": False,
-            "error": "Internal server error"
-        })
-
-        return add_cors_headers(response), 500
-
     # ========================================================
-    # DATABASE TEST
+    # REGISTER AUTH ROUTES
     # ========================================================
-
-    test_database_connection(app)
-
-    print("=" * 70)
-    print("✅ TIRSI POS API READY")
-    print("=" * 70)
-
-    return app
-
-
-# ============================================================
-# DATABASE CONNECTION TEST
-# ============================================================
-
-def test_database_connection(app):
-
-    print("=" * 70)
-    print("🔍 TESTING DATABASE CONNECTION")
-    print("=" * 70)
-
-    try:
-
-        with app.app_context():
-
-            result = db.session.execute(
-                text("SELECT 1")
-            )
-
-            result.scalar()
-
-            print(
-                "✅ Database connected successfully"
-            )
-
-            database_name = db.session.execute(
-                text("SELECT DATABASE()")
-            ).scalar()
-
-            print(
-                f"✅ Connected database: "
-                f"{database_name}"
-            )
-
-            version = db.session.execute(
-                text("SELECT VERSION()")
-            ).scalar()
-
-            print(
-                f"✅ MySQL version: {version}"
-            )
-
-    except Exception as e:
-
-        print("=" * 70)
-        print("❌ DATABASE CONNECTION FAILED")
-        print("=" * 70)
-
-        print(
-            f"Error: {str(e)}"
-        )
-
-        print()
-        print("Possible causes:")
-        print("1. Incorrect DB_HOST")
-        print("2. Incorrect DB_PORT")
-        print("3. Incorrect DB_NAME")
-        print("4. Incorrect DB_USER")
-        print("5. Incorrect DB_PASSWORD")
-        print("6. Aiven database unavailable")
-        print("7. Aiven SSL configuration")
-        print("8. Database user has insufficient permissions")
-        print()
-
-        traceback.print_exc()
-
-        # ----------------------------------------------------
-        # Do NOT crash the whole application here.
-        # Health endpoint will report database status.
-        # ----------------------------------------------------
-
-
-# ============================================================
-# ROUTES
-# ============================================================
-
-def register_routes(app):
-
-    # ========================================================
-    # SHOP LOGIN
+    #
+    # IMPORTANT:
+    #
+    # /api/auth/login
+    #
+    # MUST come from routes/auth.py.
+    #
+    # It must NOT be aliased to shop_login().
+    #
     # ========================================================
 
-    @app.route(
-        "/api/shop/login",
-        methods=["POST", "OPTIONS"]
+    init_auth_routes(app)
+
+    print(
+        "✅ Admin authentication routes initialized"
     )
-    def shop_login():
-
-        # ----------------------------------------------------
-        # CORS PREFLIGHT
-        # ----------------------------------------------------
-
-        if request.method == "OPTIONS":
-
-            return cors_options_response()
-
-        try:
-
-            # ------------------------------------------------
-            # Validate JSON
-            # ------------------------------------------------
-
-            if not request.is_json:
-
-                response = jsonify({
-                    "success": False,
-                    "error": (
-                        "Content-Type must be "
-                        "application/json"
-                    )
-                })
-
-                return add_cors_headers(response), 400
-
-            data = request.get_json(
-                silent=True
-            )
-
-            if not data:
-
-                response = jsonify({
-                    "success": False,
-                    "error": "No data provided"
-                })
-
-                return add_cors_headers(response), 400
-
-            # ------------------------------------------------
-            # Credentials
-            # ------------------------------------------------
-
-            email = str(
-                data.get("email", "")
-            ).strip().lower()
-
-            password = data.get("password")
-
-            if not email or not password:
-
-                response = jsonify({
-                    "success": False,
-                    "error": (
-                        "Email and password "
-                        "are required"
-                    )
-                })
-
-                return add_cors_headers(response), 400
-
-            # ------------------------------------------------
-            # Find Shop
-            # ------------------------------------------------
-
-            shop = Shop.query.filter_by(
-                email=email
-            ).first()
-
-            if not shop:
-
-                response = jsonify({
-                    "success": False,
-                    "error": "Invalid email or password"
-                })
-
-                return add_cors_headers(response), 401
-
-            # ------------------------------------------------
-            # Shop status
-            # ------------------------------------------------
-
-            shop_status = getattr(
-                shop,
-                "status",
-                "active"
-            )
-
-            if shop_status != "active":
-
-                response = jsonify({
-                    "success": False,
-                    "error": "Shop account is inactive"
-                })
-
-                return add_cors_headers(response), 403
-
-            # ------------------------------------------------
-            # Password verification
-            # ------------------------------------------------
-
-            if not shop.check_password(password):
-
-                response = jsonify({
-                    "success": False,
-                    "error": "Invalid email or password"
-                })
-
-                return add_cors_headers(response), 401
-
-            # ------------------------------------------------
-            # Update last active
-            # ------------------------------------------------
-
-            if hasattr(shop, "last_active"):
-
-                shop.last_active = datetime.utcnow()
-
-                db.session.commit()
-
-            # ------------------------------------------------
-            # Flask Login
-            # ------------------------------------------------
-
-            login_user(
-                shop,
-                remember=True
-            )
-
-            # ------------------------------------------------
-            # Make session permanent
-            # ------------------------------------------------
-
-            session.permanent = True
-
-            # ------------------------------------------------
-            # Prepare response
-            # ------------------------------------------------
-
-            shop_data = serialize_shop(
-                shop
-            )
-
-            response = jsonify({
-
-                "success": True,
-
-                "authenticated": True,
-
-                "message": "Login successful",
-
-                "shop": shop_data,
-
-                "user": {
-                    "id": shop.id,
-                    "email": shop.email,
-                    "name": getattr(
-                        shop,
-                        "name",
-                        None
-                    ),
-                    "owner": getattr(
-                        shop,
-                        "owner",
-                        None
-                    ),
-                    "is_admin": False,
-                    "role": "shop_owner"
-                }
-            })
-
-            response = add_cors_headers(
-                response
-            )
-
-            return response, 200
-
-        except SQLAlchemyError as e:
-
-            db.session.rollback()
-
-            app.logger.exception(
-                "Database error during shop login"
-            )
-
-            response = jsonify({
-                "success": False,
-                "error": (
-                    "Database error while "
-                    "processing login"
-                )
-            })
-
-            return add_cors_headers(
-                response
-            ), 500
-
-        except Exception as e:
-
-            db.session.rollback()
-
-            app.logger.exception(
-                f"Shop login error: {e}"
-            )
-
-            response = jsonify({
-                "success": False,
-                "error": (
-                    "Login failed. "
-                    "Please try again."
-                )
-            })
-
-            return add_cors_headers(
-                response
-            ), 500
 
     # ========================================================
-    # AUTH LOGIN ALIAS
+    # REGISTER SHOP ROUTES
     # ========================================================
 
-    @app.route(
-        "/api/auth/login",
-        methods=["POST", "OPTIONS"]
+    init_shop_routes(app)
+
+    print(
+        "✅ Shop routes initialized"
     )
-    def auth_login():
-
-        """
-        Compatibility endpoint.
-
-        The main POS login endpoint is:
-
-            /api/shop/login
-
-        This alias prevents older frontend builds
-        from failing with 404/CORS errors.
-        """
-
-        if request.method == "OPTIONS":
-
-            return cors_options_response()
-
-        return shop_login()
 
     # ========================================================
-    # SHOP LOGOUT
-    # ========================================================
-
-    @app.route(
-        "/api/shop/logout",
-        methods=["POST", "OPTIONS"]
-    )
-    @login_required
-    def shop_logout():
-
-        if request.method == "OPTIONS":
-
-            return cors_options_response()
-
-        try:
-
-            logout_user()
-
-            session.clear()
-
-            response = jsonify({
-                "success": True,
-                "message": "Logged out successfully",
-                "authenticated": False
-            })
-
-            return add_cors_headers(
-                response
-            ), 200
-
-        except Exception as e:
-
-            app.logger.exception(
-                f"Logout error: {e}"
-            )
-
-            response = jsonify({
-                "success": False,
-                "error": "Logout failed"
-            })
-
-            return add_cors_headers(
-                response
-            ), 500
-
-    # ========================================================
-    # CURRENT SHOP PROFILE
-    # ========================================================
-
-    @app.route(
-        "/api/shop/me",
-        methods=["GET", "OPTIONS"]
-    )
-    @login_required
-    def get_shop_profile():
-
-        if request.method == "OPTIONS":
-
-            return cors_options_response()
-
-        try:
-
-            shop = db.session.get(
-                Shop,
-                current_user.id
-            )
-
-            if not shop:
-
-                response = jsonify({
-                    "success": False,
-                    "error": "Shop not found"
-                })
-
-                return add_cors_headers(
-                    response
-                ), 404
-
-            response = jsonify({
-
-                "success": True,
-
-                "authenticated": True,
-
-                "shop": serialize_shop(
-                    shop
-                )
-            })
-
-            return add_cors_headers(
-                response
-            ), 200
-
-        except Exception as e:
-
-            app.logger.exception(
-                f"Profile error: {e}"
-            )
-
-            response = jsonify({
-                "success": False,
-                "error": "Failed to load profile"
-            })
-
-            return add_cors_headers(
-                response
-            ), 500
-
-    # ========================================================
-    # AUTH STATUS
-    # ========================================================
-
-    @app.route(
-        "/api/auth/me",
-        methods=["GET", "OPTIONS"]
-    )
-    def auth_me():
-
-        if request.method == "OPTIONS":
-
-            return cors_options_response()
-
-        try:
-
-            if not current_user.is_authenticated:
-
-                response = jsonify({
-                    "success": True,
-                    "authenticated": False,
-                    "user": None
-                })
-
-                return add_cors_headers(
-                    response
-                ), 200
-
-            if isinstance(current_user, Shop):
-
-                response = jsonify({
-
-                    "success": True,
-
-                    "authenticated": True,
-
-                    "user": {
-                        "id": current_user.id,
-                        "email": current_user.email,
-                        "name": getattr(
-                            current_user,
-                            "name",
-                            None
-                        ),
-                        "owner": getattr(
-                            current_user,
-                            "owner",
-                            None
-                        ),
-                        "role": "shop_owner",
-                        "is_admin": False
-                    },
-
-                    "shop": serialize_shop(
-                        current_user
-                    )
-                })
-
-                return add_cors_headers(
-                    response
-                ), 200
-
-            response = jsonify({
-
-                "success": True,
-
-                "authenticated": True,
-
-                "user": {
-                    "email": app.config[
-                        "ADMIN_EMAIL"
-                    ],
-                    "role": "super_admin",
-                    "is_admin": True
-                }
-            })
-
-            return add_cors_headers(
-                response
-            ), 200
-
-        except Exception as e:
-
-            app.logger.exception(
-                f"Auth status error: {e}"
-            )
-
-            response = jsonify({
-                "success": False,
-                "authenticated": False,
-                "error": "Failed to check authentication"
-            })
-
-            return add_cors_headers(
-                response
-            ), 500
-
-    # ========================================================
-    # AUTH LOGOUT
-    # ========================================================
-
-    @app.route(
-        "/api/auth/logout",
-        methods=["POST", "OPTIONS"]
-    )
-    def auth_logout():
-
-        if request.method == "OPTIONS":
-
-            return cors_options_response()
-
-        try:
-
-            logout_user()
-
-            session.clear()
-
-            response = jsonify({
-                "success": True,
-                "authenticated": False,
-                "message": "Logout successful"
-            })
-
-            return add_cors_headers(
-                response
-            ), 200
-
-        except Exception as e:
-
-            app.logger.exception(
-                f"Auth logout error: {e}"
-            )
-
-            response = jsonify({
-                "success": False,
-                "error": "Logout failed"
-            })
-
-            return add_cors_headers(
-                response
-            ), 500
-
-    # ========================================================
-    # API TEST
+    # API TEST ROUTE
     # ========================================================
 
     @app.route(
         "/api/test",
         methods=["GET", "OPTIONS"]
     )
-    def test():
+    def api_test():
 
         if request.method == "OPTIONS":
 
@@ -1315,11 +980,17 @@ def register_routes(app):
 
             "success": True,
 
-            "message": "Tirsi POS API is working",
+            "message": (
+                "Tirsi POS API is working"
+            ),
 
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": (
+                datetime.utcnow().isoformat()
+            ),
 
-            "environment": app.config["ENV"],
+            "environment": (
+                app.config["ENV"]
+            ),
 
             "cors": True
         })
@@ -1327,6 +998,58 @@ def register_routes(app):
         return add_cors_headers(
             response
         ), 200
+
+    # ========================================================
+    # AUTH DEBUG ROUTE
+    # ========================================================
+
+    @app.route(
+        "/api/debug/config",
+        methods=["GET"]
+    )
+    def debug_config():
+
+        return jsonify({
+
+            "environment": (
+                app.config["ENV"]
+            ),
+
+            "admin_email": (
+                app.config["ADMIN_EMAIL"]
+            ),
+
+            "admin_password_hash": (
+                "SET"
+                if app.config[
+                    "ADMIN_PASSWORD_HASH"
+                ]
+                else "NOT SET"
+            ),
+
+            "cors_origins": (
+                app.config["CORS_ORIGINS"]
+            ),
+
+            "session_cookie": (
+                app.config[
+                    "SESSION_COOKIE_NAME"
+                ]
+            ),
+
+            "session_samesite": (
+                app.config[
+                    "SESSION_COOKIE_SAMESITE"
+                ]
+            ),
+
+            "session_secure": (
+                app.config[
+                    "SESSION_COOKIE_SECURE"
+                ]
+            )
+
+        }), 200
 
     # ========================================================
     # HEALTH CHECK
@@ -1346,41 +1069,41 @@ def register_routes(app):
                     text("SELECT 1")
                 )
 
-            response = jsonify({
+            return jsonify({
 
                 "status": "healthy",
 
                 "database": "connected",
 
-                "environment": app.config[
-                    "ENV"
-                ],
+                "environment": (
+                    app.config["ENV"]
+                ),
 
-                "timestamp": datetime.utcnow().isoformat()
-            })
+                "timestamp": (
+                    datetime.utcnow().isoformat()
+                )
 
-            return response, 200
+            }), 200
 
         except Exception as e:
 
             app.logger.exception(
-                f"Health check database error: {e}"
+                "Health check failed"
             )
 
-            response = jsonify({
+            return jsonify({
 
                 "status": "unhealthy",
 
                 "database": "disconnected",
 
-                "environment": app.config[
-                    "ENV"
-                ],
+                "environment": (
+                    app.config["ENV"]
+                ),
 
                 "error": str(e)
-            })
 
-            return response, 500
+            }), 500
 
     # ========================================================
     # ROOT
@@ -1400,9 +1123,13 @@ def register_routes(app):
 
             "status": "running",
 
-            "environment": app.config[
-                "ENV"
-            ],
+            "environment": (
+                app.config["ENV"]
+            ),
+
+            "authentication": (
+                "Flask-Login + Cookies + Sessions"
+            ),
 
             "endpoints": {
 
@@ -1410,19 +1137,321 @@ def register_routes(app):
 
                 "test": "/api/test",
 
-                "shop_login": "/api/shop/login",
+                # Admin
+                "admin_login": (
+                    "/api/auth/login"
+                ),
 
-                "shop_logout": "/api/shop/logout",
+                "admin_logout": (
+                    "/api/auth/logout"
+                ),
 
-                "shop_me": "/api/shop/me",
+                "admin_me": (
+                    "/api/auth/me"
+                ),
 
-                "auth_login": "/api/auth/login",
+                "admin_check": (
+                    "/api/auth/check"
+                ),
 
-                "auth_me": "/api/auth/me",
+                # Shop
+                "shop_login": (
+                    "/api/shop/login"
+                ),
 
-                "auth_logout": "/api/auth/logout"
+                "shop_logout": (
+                    "/api/shop/logout"
+                ),
+
+                "shop_me": (
+                    "/api/shop/me"
+                )
             }
+
         }), 200
+
+    # ========================================================
+    # ERROR HANDLERS
+    # ========================================================
+
+    @app.errorhandler(400)
+    def handle_400(error):
+
+        response = jsonify({
+
+            "success": False,
+
+            "error": "Bad request"
+
+        })
+
+        return add_cors_headers(
+            response
+        ), 400
+
+    # --------------------------------------------------------
+
+    @app.errorhandler(401)
+    def handle_401(error):
+
+        response = jsonify({
+
+            "success": False,
+
+            "authenticated": False,
+
+            "error": "Unauthorized"
+
+        })
+
+        return add_cors_headers(
+            response
+        ), 401
+
+    # --------------------------------------------------------
+
+    @app.errorhandler(403)
+    def handle_403(error):
+
+        response = jsonify({
+
+            "success": False,
+
+            "error": "Forbidden"
+
+        })
+
+        return add_cors_headers(
+            response
+        ), 403
+
+    # --------------------------------------------------------
+
+    @app.errorhandler(404)
+    def handle_404(error):
+
+        response = jsonify({
+
+            "success": False,
+
+            "error": "Endpoint not found",
+
+            "path": request.path
+
+        })
+
+        return add_cors_headers(
+            response
+        ), 404
+
+    # --------------------------------------------------------
+
+    @app.errorhandler(405)
+    def handle_405(error):
+
+        response = jsonify({
+
+            "success": False,
+
+            "error": "Method not allowed",
+
+            "method": request.method,
+
+            "path": request.path
+
+        })
+
+        return add_cors_headers(
+            response
+        ), 405
+
+    # --------------------------------------------------------
+
+    @app.errorhandler(500)
+    def handle_500(error):
+
+        app.logger.exception(
+            "Unhandled server error"
+        )
+
+        response = jsonify({
+
+            "success": False,
+
+            "error": "Internal server error"
+
+        })
+
+        return add_cors_headers(
+            response
+        ), 500
+
+    # ========================================================
+    # DATABASE TEST
+    # ========================================================
+
+    test_database_connection(
+        app
+    )
+
+    # ========================================================
+    # FINAL STARTUP MESSAGE
+    # ========================================================
+
+    print()
+    print("=" * 70)
+    print("✅ TIRSI POS API READY")
+    print("=" * 70)
+
+    print(
+        "Admin Login: "
+        "/api/auth/login"
+    )
+
+    print(
+        "Shop Login: "
+        "/api/shop/login"
+    )
+
+    print(
+        "Admin Email: "
+        f"{app.config['ADMIN_EMAIL']}"
+    )
+
+    print(
+        "Admin Password Hash: "
+        + (
+            "CONFIGURED"
+            if app.config[
+                "ADMIN_PASSWORD_HASH"
+            ]
+            else "MISSING"
+        )
+    )
+
+    print("=" * 70)
+
+    return app
+
+
+# ============================================================
+# DATABASE CONNECTION TEST
+# ============================================================
+
+def test_database_connection(app):
+
+    print()
+    print("=" * 70)
+    print("🔍 TESTING DATABASE CONNECTION")
+    print("=" * 70)
+
+    try:
+
+        with app.app_context():
+
+            result = db.session.execute(
+                text("SELECT 1")
+            )
+
+            result.scalar()
+
+            print(
+                "✅ Database connected successfully"
+            )
+
+            # ------------------------------------------------
+            # Database name
+            # ------------------------------------------------
+
+            try:
+
+                database_name = (
+                    db.session.execute(
+                        text(
+                            "SELECT DATABASE()"
+                        )
+                    ).scalar()
+                )
+
+                print(
+                    "✅ Connected database: "
+                    f"{database_name}"
+                )
+
+            except Exception:
+
+                pass
+
+            # ------------------------------------------------
+            # Database version
+            # ------------------------------------------------
+
+            try:
+
+                version = (
+                    db.session.execute(
+                        text(
+                            "SELECT VERSION()"
+                        )
+                    ).scalar()
+                )
+
+                print(
+                    "✅ Database version: "
+                    f"{version}"
+                )
+
+            except Exception:
+
+                pass
+
+    except Exception as e:
+
+        print()
+        print(
+            "❌ DATABASE CONNECTION FAILED"
+        )
+
+        print(
+            f"Error: {e}"
+        )
+
+        print()
+        print(
+            "Check these environment variables:"
+        )
+
+        print(
+            "DB_HOST"
+        )
+
+        print(
+            "DB_PORT"
+        )
+
+        print(
+            "DB_NAME"
+        )
+
+        print(
+            "DB_USER"
+        )
+
+        print(
+            "DB_PASSWORD"
+        )
+
+        print(
+            "DATABASE_URL"
+        )
+
+        print()
+
+        traceback.print_exc()
+
+        # ----------------------------------------------------
+        # Do not crash application.
+        # ----------------------------------------------------
 
 
 # ============================================================
@@ -1454,7 +1483,8 @@ if __name__ == "__main__":
         os.getenv(
             "DEBUG",
             "False"
-        ).lower() == "true"
+        ).lower()
+        == "true"
     )
 
     app.run(
