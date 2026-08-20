@@ -1,17 +1,34 @@
 # ============================================================
 # TIRSI POS API
-# Application Factory
+# APPLICATION FACTORY
 #
-# Authentication routes:
-#   routes/auth.py
+# app.py responsibilities:
 #
-# Shop routes:
-#   routes/shop.py
+#   - Create Flask application
+#   - Configure environment
+#   - Configure database
+#   - Configure CORS
+#   - Configure Flask-Session
+#   - Configure Flask-Login
+#   - Configure Bcrypt
+#   - Configure Flask-Migrate
+#   - Configure user loader
+#   - Register auth routes
+#   - Register shop routes
+#   - Health check
+#   - API test
+#   - Root API information
+#   - Error handlers
 #
-# Authentication:
-#   Flask-Login
-#   Flask-Session
-#   HTTP Cookies
+# IMPORTANT:
+#
+# Authentication routes belong to:
+#       routes/auth.py
+#
+# Shop routes belong to:
+#       routes/shop.py
+#
+# DO NOT duplicate those routes here.
 #
 # Frontend:
 #   https://pos-frontend-j0hd.onrender.com
@@ -20,23 +37,56 @@
 #   https://pos-api4.onrender.com
 # ============================================================
 
+
+# ============================================================
+# STANDARD LIBRARY
+# ============================================================
+
 import os
 import traceback
-from datetime import timedelta
+from datetime import datetime, timedelta
+
+
+# ============================================================
+# ENVIRONMENT
+# ============================================================
 
 from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+
+# ============================================================
+# FLASK
+# ============================================================
 
 from flask import (
     Flask,
     jsonify,
     request,
+    current_app,
 )
+
+
+# ============================================================
+# FLASK EXTENSIONS
+# ============================================================
 
 from flask_cors import CORS
 from flask_session import Session
 from flask_login import LoginManager
 
+
+# ============================================================
+# DATABASE
+# ============================================================
+
 from sqlalchemy import text
+
+
+# ============================================================
+# APPLICATION EXTENSIONS
+# ============================================================
 
 from extensions import (
     db,
@@ -44,11 +94,17 @@ from extensions import (
     bcrypt,
 )
 
+
+# ============================================================
+# MODELS
+# ============================================================
+
 from models.shop import Shop
 
-# ------------------------------------------------------------
-# ROUTE MODULES
-# ------------------------------------------------------------
+
+# ============================================================
+# ROUTES
+# ============================================================
 
 from routes.auth import (
     init_auth_routes,
@@ -61,29 +117,24 @@ from routes.shop import (
 
 
 # ============================================================
-# LOAD ENVIRONMENT
-# ============================================================
-
-load_dotenv(override=True)
-
-
-# ============================================================
-# FLASK LOGIN MANAGER
+# FLASK-LOGIN MANAGER
 # ============================================================
 
 login_manager = LoginManager()
 
-# API application does not need HTML redirects.
+# API application should return JSON instead
+# of redirecting to an HTML login page.
 login_manager.login_view = None
 
 
 # ============================================================
-# FRONTEND URLS
+# FRONTEND
 # ============================================================
 
 DEFAULT_FRONTEND_URL = (
     "https://pos-frontend-j0hd.onrender.com"
 )
+
 
 LOCAL_FRONTEND_URLS = [
     "http://localhost:5173",
@@ -94,10 +145,19 @@ LOCAL_FRONTEND_URLS = [
 
 
 # ============================================================
-# CORS ORIGINS
+# ALLOWED CORS ORIGINS
 # ============================================================
 
 def get_allowed_origins():
+    """
+    Get allowed frontend origins from CORS_ORIGINS.
+
+    Example Render environment variable:
+
+        CORS_ORIGINS=https://pos-frontend-j0hd.onrender.com
+
+    Multiple origins can be separated by commas.
+    """
 
     configured = os.getenv(
         "CORS_ORIGINS",
@@ -119,6 +179,7 @@ def get_allowed_origins():
             *LOCAL_FRONTEND_URLS,
         ]
 
+    # Remove duplicates while preserving order.
     return list(
         dict.fromkeys(origins)
     )
@@ -129,6 +190,9 @@ def get_allowed_origins():
 # ============================================================
 
 def get_request_origin():
+    """
+    Return normalized Origin header.
+    """
 
     origin = request.headers.get(
         "Origin"
@@ -145,23 +209,35 @@ def get_request_origin():
 # ============================================================
 
 def is_allowed_origin(origin):
+    """
+    Check whether an origin is allowed.
+    """
 
     if not origin:
         return False
 
-    allowed = current_app.config.get(
+    allowed_origins = current_app.config.get(
         "CORS_ORIGINS",
         []
     )
 
-    return origin.rstrip("/") in allowed
+    return (
+        origin.rstrip("/")
+        in allowed_origins
+    )
 
 
 # ============================================================
-# CORS HEADERS
+# ADD CORS HEADERS
 # ============================================================
 
 def add_cors_headers(response):
+    """
+    Add CORS headers to JSON responses.
+
+    This is useful for custom error responses
+    and Flask-Login unauthorized responses.
+    """
 
     origin = get_request_origin()
 
@@ -186,10 +262,17 @@ def add_cors_headers(response):
 
 
 # ============================================================
-# CORS PREFLIGHT
+# CORS PREFLIGHT RESPONSE
 # ============================================================
 
 def cors_options_response():
+    """
+    Handle manual OPTIONS requests.
+
+    Flask-CORS handles normal preflight requests,
+    but this function is available for API routes
+    that explicitly need an OPTIONS response.
+    """
 
     response = jsonify({
         "success": True,
@@ -251,6 +334,10 @@ def cors_options_response():
 
 def create_app(config_name="development"):
 
+    # ========================================================
+    # CREATE FLASK APPLICATION
+    # ========================================================
+
     app = Flask(__name__)
 
 
@@ -263,18 +350,23 @@ def create_app(config_name="development"):
         config_name
     ).strip().lower()
 
-    app.config["ENV"] = environment
+    app.config[
+        "ENV"
+    ] = environment
 
 
     # ========================================================
     # DEBUG
     # ========================================================
 
-    app.config["DEBUG"] = (
+    app.config[
+        "DEBUG"
+    ] = (
         os.getenv(
             "DEBUG",
             "False"
-        ).strip().lower() == "true"
+        ).strip().lower()
+        == "true"
     )
 
 
@@ -305,7 +397,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # ADMIN CONFIG
+    # ADMIN CONFIGURATION
     #
     # Used by routes/auth.py
     # ========================================================
@@ -316,6 +408,7 @@ def create_app(config_name="development"):
         "ADMIN_EMAIL",
         "superadmin@system.com"
     ).strip().lower()
+
 
     app.config[
         "ADMIN_PASSWORD_HASH"
@@ -357,6 +450,10 @@ def create_app(config_name="development"):
 
     # ========================================================
     # DATABASE URL
+    #
+    # Prefer DATABASE_URL when available.
+    #
+    # Otherwise build MySQL URL from DB_* variables.
     # ========================================================
 
     database_url = os.getenv(
@@ -365,6 +462,7 @@ def create_app(config_name="development"):
 
     if database_url:
 
+        # Render / PostgreSQL compatibility.
         if database_url.startswith(
             "postgres://"
         ):
@@ -402,16 +500,22 @@ def create_app(config_name="development"):
         "SQLALCHEMY_TRACK_MODIFICATIONS"
     ] = False
 
+
     app.config[
         "SQLALCHEMY_ENGINE_OPTIONS"
     ] = {
 
+        # Automatically verify connections
+        # before using them.
         "pool_pre_ping": True,
 
+        # Prevent stale MySQL connections.
         "pool_recycle": 280,
 
+        # Connection wait timeout.
         "pool_timeout": 30,
 
+        # Additional connections.
         "max_overflow": 10,
 
         "connect_args": {
@@ -422,6 +526,11 @@ def create_app(config_name="development"):
 
     # ========================================================
     # AIVEN SSL
+    #
+    # Optional.
+    #
+    # If AIVEN_CA_PATH is supplied and the file exists,
+    # use that CA certificate.
     # ========================================================
 
     aiven_ca = os.getenv(
@@ -435,7 +544,11 @@ def create_app(config_name="development"):
 
         app.config[
             "SQLALCHEMY_ENGINE_OPTIONS"
-        ]["connect_args"]["ssl"] = {
+        ][
+            "connect_args"
+        ][
+            "ssl"
+        ] = {
             "ca": aiven_ca
         }
 
@@ -453,36 +566,51 @@ def create_app(config_name="development"):
 
     # ========================================================
     # FLASK SESSION
+    #
+    # Frontend and backend are on different Render domains.
+    #
+    # Therefore:
+    #
+    #   SameSite=None
+    #   Secure=True in production
+    #
+    # is required for cross-site cookies.
     # ========================================================
 
     app.config[
         "SESSION_TYPE"
     ] = "filesystem"
 
+
     app.config[
         "SESSION_PERMANENT"
     ] = True
+
 
     app.config[
         "SESSION_USE_SIGNER"
     ] = True
 
+
     app.config[
         "SESSION_KEY_PREFIX"
     ] = "tirsi_"
+
 
     app.config[
         "SESSION_COOKIE_NAME"
     ] = "tirsi_session"
 
+
     app.config[
         "SESSION_COOKIE_HTTPONLY"
     ] = True
 
-    # Frontend and backend are on different Render domains.
+
     app.config[
         "SESSION_COOKIE_SAMESITE"
     ] = "None"
+
 
     app.config[
         "SESSION_COOKIE_SECURE"
@@ -490,9 +618,11 @@ def create_app(config_name="development"):
         environment == "production"
     )
 
+
     app.config[
         "SESSION_REFRESH_EACH_REQUEST"
     ] = True
+
 
     app.config[
         "PERMANENT_SESSION_LIFETIME"
@@ -509,15 +639,18 @@ def create_app(config_name="development"):
         "REMEMBER_COOKIE_HTTPONLY"
     ] = True
 
+
     app.config[
         "REMEMBER_COOKIE_SAMESITE"
     ] = "None"
+
 
     app.config[
         "REMEMBER_COOKIE_SECURE"
     ] = (
         environment == "production"
     )
+
 
     app.config[
         "REMEMBER_COOKIE_DURATION"
@@ -544,7 +677,8 @@ def create_app(config_name="development"):
     )
 
     print(
-        f"Admin email: {app.config['ADMIN_EMAIL']}"
+        f"Admin email: "
+        f"{app.config['ADMIN_EMAIL']}"
     )
 
     print(
@@ -581,7 +715,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # INITIALIZE DATABASE
+    # INITIALIZE SQLALCHEMY
     # ========================================================
 
     db.init_app(app)
@@ -592,7 +726,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # FLASK MIGRATE
+    # INITIALIZE FLASK-MIGRATE
     # ========================================================
 
     migrate.init_app(
@@ -606,7 +740,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # BCRYPT
+    # INITIALIZE BCRYPT
     # ========================================================
 
     bcrypt.init_app(app)
@@ -617,7 +751,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # CORS
+    # INITIALIZE CORS
     # ========================================================
 
     CORS(
@@ -640,6 +774,8 @@ def create_app(config_name="development"):
             "Accept",
             "Origin",
             "Cookie",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
         ],
 
         methods=[
@@ -664,7 +800,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # FLASK SESSION
+    # INITIALIZE FLASK SESSION
     # ========================================================
 
     Session(app)
@@ -675,13 +811,17 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # FLASK LOGIN
+    # INITIALIZE FLASK-LOGIN
     # ========================================================
 
     login_manager.init_app(app)
 
-    # Strong session protection can invalidate sessions when
-    # client information changes.
+    login_manager.login_view = None
+
+    # Strong protection can sometimes invalidate sessions
+    # when client information changes.
+    #
+    # Keep it as requested for now.
     login_manager.session_protection = "strong"
 
     print(
@@ -694,12 +834,11 @@ def create_app(config_name="development"):
     #
     # IMPORTANT:
     #
-    # AdminUser comes from routes/auth.py.
+    # auth.py owns admin authentication.
+    # shop.py owns shop authentication.
     #
-    # Shop comes from models.shop.
-    #
-    # app.py only loads the user.
-    # It does NOT implement login/logout.
+    # This function ONLY tells Flask-Login how to restore
+    # a logged-in user from the session.
     # ========================================================
 
     @login_manager.user_loader
@@ -710,12 +849,23 @@ def create_app(config_name="development"):
             if not user_id:
                 return None
 
-            user_id = str(user_id)
+            user_id = str(
+                user_id
+            )
 
 
-            # ------------------------------------------------
-            # ADMIN
-            # ------------------------------------------------
+            # =================================================
+            # ADMIN USER
+            #
+            # auth.py should call login_user() with:
+            #
+            #     AdminUser(...)
+            #
+            # whose get_id() returns:
+            #
+            #     admin:1
+            #
+            # =================================================
 
             if user_id == "admin:1":
 
@@ -726,9 +876,9 @@ def create_app(config_name="development"):
                 )
 
 
-            # ------------------------------------------------
-            # SHOP
-            # ------------------------------------------------
+            # =================================================
+            # SHOP USER
+            # =================================================
 
             try:
 
@@ -762,10 +912,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # UNAUTHORIZED HANDLER
-    #
-    # Flask-Login normally redirects.
-    # For an API we return JSON.
+    # FLASK-LOGIN UNAUTHORIZED HANDLER
     # ========================================================
 
     @login_manager.unauthorized_handler
@@ -789,7 +936,9 @@ def create_app(config_name="development"):
     # ========================================================
     # REGISTER AUTH ROUTES
     #
-    # routes/auth.py owns:
+    # ALL authentication routes remain in auth.py.
+    #
+    # app.py does NOT define:
     #
     #   /api/auth/login
     #   /api/auth/logout
@@ -797,9 +946,13 @@ def create_app(config_name="development"):
     #   /api/auth/me
     #   /api/auth/session-status
     #   /api/auth/debug
+    #
+    # Those belong to routes/auth.py.
     # ========================================================
 
-    init_auth_routes(app)
+    init_auth_routes(
+        app
+    )
 
     print(
         "✅ Authentication routes registered"
@@ -809,16 +962,22 @@ def create_app(config_name="development"):
     # ========================================================
     # REGISTER SHOP ROUTES
     #
-    # routes/shop.py owns:
+    # ALL shop routes remain in shop.py.
+    #
+    # app.py does NOT define:
     #
     #   /api/shop/login
     #   /api/shop/logout
     #   /api/shop/me
     #   /api/shops
     #   /api/shops/stats
+    #
+    # Those belong to routes/shop.py.
     # ========================================================
 
-    init_shop_routes(app)
+    init_shop_routes(
+        app
+    )
 
     print(
         "✅ Shop routes registered"
@@ -827,16 +986,24 @@ def create_app(config_name="development"):
 
     # ========================================================
     # API TEST
+    #
+    # This is intentionally kept in app.py because it is
+    # an application-level health/test endpoint.
     # ========================================================
 
     @app.route(
         "/api/test",
-        methods=["GET", "OPTIONS"]
+        methods=[
+            "GET",
+            "OPTIONS"
+        ]
     )
     def api_test():
 
         if request.method == "OPTIONS":
+
             return cors_options_response()
+
 
         response = jsonify({
 
@@ -858,7 +1025,7 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # ROOT
+    # ROOT API
     # ========================================================
 
     @app.route(
@@ -906,6 +1073,9 @@ def create_app(config_name="development"):
 
     # ========================================================
     # HEALTH CHECK
+    #
+    # This is also used by Render to verify that the API
+    # process is alive.
     # ========================================================
 
     @app.route(
@@ -936,6 +1106,7 @@ def create_app(config_name="development"):
 
                 "timestamp":
                     datetime.utcnow().isoformat()
+
             }), 200
 
 
@@ -958,11 +1129,12 @@ def create_app(config_name="development"):
 
                 "error":
                     str(e)
+
             }), 500
 
 
     # ========================================================
-    # ERROR HANDLERS
+    # 400 ERROR
     # ========================================================
 
     @app.errorhandler(400)
@@ -980,6 +1152,10 @@ def create_app(config_name="development"):
             response
         ), 400
 
+
+    # ========================================================
+    # 401 ERROR
+    # ========================================================
 
     @app.errorhandler(401)
     def handle_401(error):
@@ -999,6 +1175,10 @@ def create_app(config_name="development"):
         ), 401
 
 
+    # ========================================================
+    # 403 ERROR
+    # ========================================================
+
     @app.errorhandler(403)
     def handle_403(error):
 
@@ -1014,6 +1194,10 @@ def create_app(config_name="development"):
             response
         ), 403
 
+
+    # ========================================================
+    # 404 ERROR
+    # ========================================================
 
     @app.errorhandler(404)
     def handle_404(error):
@@ -1033,6 +1217,10 @@ def create_app(config_name="development"):
             response
         ), 404
 
+
+    # ========================================================
+    # 405 ERROR
+    # ========================================================
 
     @app.errorhandler(405)
     def handle_405(error):
@@ -1056,6 +1244,10 @@ def create_app(config_name="development"):
         ), 405
 
 
+    # ========================================================
+    # 500 ERROR
+    # ========================================================
+
     @app.errorhandler(500)
     def handle_500(error):
 
@@ -1077,13 +1269,17 @@ def create_app(config_name="development"):
 
 
     # ========================================================
-    # DATABASE TEST
+    # DATABASE STARTUP TEST
     # ========================================================
 
     test_database_connection(
         app
     )
 
+
+    # ========================================================
+    # APPLICATION READY
+    # ========================================================
 
     print("=" * 70)
     print("✅ TIRSI POS API READY")
@@ -1108,6 +1304,10 @@ def test_database_connection(app):
 
         with app.app_context():
 
+            # ------------------------------------------------
+            # BASIC CONNECTION
+            # ------------------------------------------------
+
             result = db.session.execute(
                 text("SELECT 1")
             )
@@ -1125,17 +1325,23 @@ def test_database_connection(app):
 
             try:
 
-                database_name = db.session.execute(
-                    text("SELECT DATABASE()")
-                ).scalar()
+                database_name = (
+                    db.session.execute(
+                        text("SELECT DATABASE()")
+                    ).scalar()
+                )
 
                 print(
                     f"✅ Connected database: "
                     f"{database_name}"
                 )
 
-            except Exception:
-                pass
+            except Exception as e:
+
+                print(
+                    "⚠️ Could not determine "
+                    f"database name: {e}"
+                )
 
 
             # ------------------------------------------------
@@ -1144,17 +1350,23 @@ def test_database_connection(app):
 
             try:
 
-                version = db.session.execute(
-                    text("SELECT VERSION()")
-                ).scalar()
+                version = (
+                    db.session.execute(
+                        text("SELECT VERSION()")
+                    ).scalar()
+                )
 
                 print(
                     f"✅ Database version: "
                     f"{version}"
                 )
 
-            except Exception:
-                pass
+            except Exception as e:
+
+                print(
+                    "⚠️ Could not determine "
+                    f"database version: {e}"
+                )
 
 
     except Exception as e:
@@ -1167,25 +1379,68 @@ def test_database_connection(app):
             f"Error: {str(e)}"
         )
 
+        print()
+        print(
+            "Check the following:"
+        )
+
+        print(
+            "1. DB_HOST"
+        )
+
+        print(
+            "2. DB_PORT"
+        )
+
+        print(
+            "3. DB_NAME"
+        )
+
+        print(
+            "4. DB_USER"
+        )
+
+        print(
+            "5. DB_PASSWORD"
+        )
+
+        print(
+            "6. Aiven SSL configuration"
+        )
+
         traceback.print_exc()
 
-    print("=" * 70)
+    finally:
+
+        print("=" * 70)
 
 
 # ============================================================
 # CREATE APPLICATION
 # ============================================================
+#
+# Gunicorn imports this object using:
+#
+#     app:app
+#
+# ============================================================
 
 app = create_app(
     os.getenv(
         "ENV",
-        "development"
+        "production"
     )
 )
 
 
 # ============================================================
-# DEVELOPMENT SERVER
+# LOCAL DEVELOPMENT SERVER
+# ============================================================
+#
+# This section is NOT used by Gunicorn on Render.
+#
+# Render uses Gunicorn.
+#
 # ============================================================
 
 if __name__ == "__main__":
@@ -1201,7 +1456,8 @@ if __name__ == "__main__":
         os.getenv(
             "DEBUG",
             "False"
-        ).strip().lower() == "true"
+        ).strip().lower()
+        == "true"
     )
 
     app.run(
