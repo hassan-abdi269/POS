@@ -52,7 +52,7 @@ const Navbar = ({ pageTitle, onMenuClick }) => {
 
   const handleLogout = async () => {
     try {
-      await fetch('https://pos-api4.onrender.com/api/shop/logout', {
+      await fetch('http://localhost:5000/api/shop/logout', {
         method: 'POST',
         credentials: 'include'
       });

@@ -1,6 +1,5 @@
 from routes.auth import init_auth_routes
 from routes.shop import init_shop_routes
-
 from routes.inventory import init_inventory_routes
 from routes.sales import init_sales_routes
 from routes.expense import init_expense_routes
@@ -13,11 +12,10 @@ from routes.userguide import init_userguide_routes
 from routes.payment import init_payment_routes
 
 
-
 def init_routes(app):
 
     """
-    Register all application routes
+    Register all application routes.
     """
 
     init_auth_routes(app)

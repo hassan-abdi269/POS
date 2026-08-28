@@ -19,7 +19,11 @@ import {
   Upload,
   Image as ImageIcon,
   LayoutGrid,
-  List
+  List,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  Clock
 } from 'lucide-react';
 import { inventoryService, authService, uploadService } from '../service/api';
 
@@ -36,6 +40,8 @@ const Inventory = () => {
   const [success, setSuccess] = useState('');
   const [alerts, setAlerts] = useState([]);
   const [viewMode, setViewMode] = useState('cards');
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     sku: '',
@@ -88,7 +94,7 @@ const Inventory = () => {
     fetchProducts();
   }, []);
 
-  // Handle stock update with automatic subtraction and status change
+  // Handle stock update - sends CHANGE amount to API
   const updateProductStock = async (productId, change) => {
     try {
       const shopId = getShopId();
@@ -99,70 +105,109 @@ const Inventory = () => {
 
       // Get current product
       const product = inventoryData.find(p => p.id === productId);
-      if (!product) return false;
+      if (!product) {
+        console.error('Product not found:', productId);
+        return false;
+      }
 
-      const newStock = Math.max(0, product.stock + change);
+      // Store old status before update
+      const oldStatus = product.status || 'Unknown';
+      const oldStock = product.stock || 0;
       
-      // Call API to update stock
-      const updatedProduct = await inventoryService.updateStock(productId, newStock);
+      // Calculate new stock
+      const newStock = Math.max(0, oldStock + change);
+      
+      // Send the CHANGE amount to API
+      const updatedProduct = await inventoryService.updateStock(productId, change);
+      
+      // Ensure we have the updated product data
+      if (!updatedProduct || !updatedProduct.id) {
+        console.error('Invalid product data returned from API:', updatedProduct);
+        await fetchProducts();
+        return true;
+      }
+      
+      // Get new status from updated product
+      const newStatus = updatedProduct.status || 'Unknown';
+      
+      // MERGE the updated product with existing product data
+      const mergedProduct = {
+        ...product,
+        ...updatedProduct,
+        stock: updatedProduct.stock ?? newStock,
+        stock_limit: updatedProduct.stock_limit ?? product.stock_limit ?? 50,
+        status: newStatus,
+        name: updatedProduct.name || product.name,
+        sku: updatedProduct.sku || product.sku,
+        price: updatedProduct.price || product.price,
+        cost: updatedProduct.cost || product.cost,
+        expected_profit_per_unit: updatedProduct.expected_profit_per_unit ?? product.expected_profit_per_unit ?? 0,
+        expected_profit_total: updatedProduct.expected_profit_total ?? product.expected_profit_total ?? 0,
+        profit_margin_percentage: updatedProduct.profit_margin_percentage ?? product.profit_margin_percentage ?? 0,
+        image_url: updatedProduct.image_url || product.image_url || '',
+        description: updatedProduct.description || product.description || '',
+        supplier_id: updatedProduct.supplier_id ?? product.supplier_id,
+        supplier_name: updatedProduct.supplier_name || product.supplier_name,
+        created_at: updatedProduct.created_at || product.created_at,
+        updated_at: updatedProduct.updated_at || product.updated_at,
+        is_active: updatedProduct.is_active !== undefined ? updatedProduct.is_active : product.is_active,
+        image_emoji: updatedProduct.image_emoji || product.image_emoji || '📦'
+      };
       
       // Update the product in the local state
       setInventoryData(prev => 
-        prev.map(p => p.id === productId ? updatedProduct : p)
+        prev.map(p => p.id === productId ? mergedProduct : p)
       );
       
       // Reset quantity display for this product
       setQuantities(prev => ({ ...prev, [productId]: 0 }));
       
       const productName = product.name || 'Product';
+      const currentStock = mergedProduct.stock ?? 0;
+      const stockLimit = mergedProduct.stock_limit ?? 50;
       
-      // Create status-specific messages
-      let statusMessage = '';
-      let alertType = '';
-      
-      if (updatedProduct.status === 'In Stock') {
-        statusMessage = `✅ ${productName}: Stock is healthy (${updatedProduct.stock} units available - Limit: ${updatedProduct.stock_limit})`;
-        alertType = 'success';
-      } else if (updatedProduct.status === 'Low Stock') {
-        statusMessage = `⚠️ ${productName}: Running low on stock (${updatedProduct.stock} units remaining - Limit: ${updatedProduct.stock_limit})`;
-        alertType = 'warning';
-      } else if (updatedProduct.status === 'Out of Stock') {
-        statusMessage = `🚨 ${productName}: OUT OF STOCK! (0 units available)`;
-        alertType = 'danger';
-      }
-      
-      // Show alert based on status
-      if (updatedProduct.status === 'Low Stock' || updatedProduct.status === 'Out of Stock') {
-        let colorInfo = {};
-        if (updatedProduct.status === 'Out of Stock') {
-          colorInfo = { bg: 'bg-red-50', border: 'border-red-500', icon: 'text-red-500', type: 'danger' };
-        } else {
-          colorInfo = { bg: 'bg-blue-50', border: 'border-blue-500', icon: 'text-blue-500', type: 'warning' };
+      // ✅ ONLY show message if status changed
+      if (oldStatus !== newStatus) {
+        let statusMessage = '';
+        
+        if (newStatus === 'In Stock') {
+          statusMessage = `✅ ${productName}: Stock is healthy (${currentStock} units available - Limit: ${stockLimit})`;
+          setSuccess(statusMessage);
+          setTimeout(() => setSuccess(''), 30000);
+        } else if (newStatus === 'Low Stock') {
+          statusMessage = `⚠️ ${productName}: Running low on stock (${currentStock} units remaining - Limit: ${stockLimit})`;
+          const colorInfo = { bg: 'bg-blue-50', border: 'border-blue-500', icon: 'text-blue-500', type: 'warning' };
+          setAlerts(prev => [...prev, { 
+            message: statusMessage, 
+            type: colorInfo.type,
+            bgColor: colorInfo.bg,
+            borderColor: colorInfo.border,
+            iconColor: colorInfo.icon
+          }]);
+          setTimeout(() => {
+            setAlerts(prev => prev.filter(a => a.message !== statusMessage));
+          }, 30000);
+        } else if (newStatus === 'Out of Stock') {
+          statusMessage = `🚨 ${productName}: OUT OF STOCK! (0 units available)`;
+          const colorInfo = { bg: 'bg-red-50', border: 'border-red-500', icon: 'text-red-500', type: 'danger' };
+          setAlerts(prev => [...prev, { 
+            message: statusMessage, 
+            type: colorInfo.type,
+            bgColor: colorInfo.bg,
+            borderColor: colorInfo.border,
+            iconColor: colorInfo.icon
+          }]);
+          setTimeout(() => {
+            setAlerts(prev => prev.filter(a => a.message !== statusMessage));
+          }, 30000);
         }
-        setAlerts(prev => [...prev, { 
-          message: statusMessage, 
-          type: colorInfo.type,
-          bgColor: colorInfo.bg,
-          borderColor: colorInfo.border,
-          iconColor: colorInfo.icon
-        }]);
-        // Auto-dismiss alerts after 30 seconds
-        setTimeout(() => {
-          setAlerts(prev => prev.filter(a => a.message !== statusMessage));
-        }, 30000);
-      } else {
-        // Show success message
-        setSuccess(statusMessage);
-        // Auto-dismiss success message after 30 seconds
-        setTimeout(() => {
-          setSuccess('');
-        }, 30000);
       }
       
       return true;
     } catch (error) {
       console.error('Error updating stock:', error);
       setError(error.response?.data?.error || 'Failed to update stock');
+      setTimeout(() => setError(''), 5000);
       return false;
     }
   };
@@ -171,7 +216,10 @@ const Inventory = () => {
   const handleQuantityChange = async (productId, change) => {
     // Find the product to check current stock
     const product = inventoryData.find(p => p.id === productId);
-    if (!product) return;
+    if (!product) {
+      console.error('Product not found:', productId);
+      return;
+    }
     
     // Calculate new stock
     const newStock = product.stock + change;
@@ -183,13 +231,13 @@ const Inventory = () => {
       return;
     }
     
-    // Update the quantity display
+    // Update the quantity display immediately for UI feedback
     setQuantities(prev => ({
       ...prev,
       [productId]: Math.max(0, (prev[productId] || 0) + change)
     }));
     
-    // Call the API to update stock
+    // Call the API to update stock - passes the CHANGE amount
     await updateProductStock(productId, change);
   };
 
@@ -210,11 +258,32 @@ const Inventory = () => {
     }
   };
 
+  // Get profit color based on margin
+  const getProfitColor = (margin) => {
+    if (margin >= 50) return 'text-green-600';
+    if (margin >= 30) return 'text-blue-600';
+    if (margin >= 15) return 'text-yellow-600';
+    if (margin >= 5) return 'text-orange-600';
+    return 'text-red-600';
+  };
+
+  // Format currency
+  const formatCurrency = (amount) => {
+    return `KES ${amount?.toFixed(2) || '0.00'}`;
+  };
+
   // Stats
   const totalProducts = inventoryData.length;
   const inStock = inventoryData.filter(item => item.status === 'In Stock').length;
   const lowStock = inventoryData.filter(item => item.status === 'Low Stock').length;
   const outOfStock = inventoryData.filter(item => item.status === 'Out of Stock').length;
+  
+  // Profit stats
+  const totalProfitPotential = inventoryData.reduce((sum, item) => sum + (item.expected_profit_total || 0), 0);
+  const totalInventoryValue = inventoryData.reduce((sum, item) => sum + ((item.price || 0) * (item.stock || 0)), 0);
+  const avgProfitMargin = inventoryData.filter(item => item.price > 0).length > 0
+    ? inventoryData.filter(item => item.price > 0).reduce((sum, item) => sum + (item.profit_margin_percentage || 0), 0) / inventoryData.filter(item => item.price > 0).length
+    : 0;
 
   const filteredItems = inventoryData.filter(item => {
     const matchesSearch = item.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -366,15 +435,11 @@ const Inventory = () => {
     }
   };
 
-  // Auto-dismiss alerts after 30 seconds
-  useEffect(() => {
-    if (alerts.length > 0) {
-      const timer = setTimeout(() => {
-        setAlerts([]);
-      }, 30000);
-      return () => clearTimeout(timer);
-    }
-  }, [alerts]);
+  // View price history
+  const handleViewHistory = (product) => {
+    setSelectedProduct(product);
+    setShowHistoryModal(true);
+  };
 
   return (
     <div>
@@ -519,6 +584,34 @@ const Inventory = () => {
         </div>
       </div>
 
+      {/* Profit Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-xl p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp className="w-4 h-4 text-green-600" />
+            <p className="text-sm text-green-700 font-medium">Total Profit Potential</p>
+          </div>
+          <p className="text-2xl font-bold text-green-700">{formatCurrency(totalProfitPotential)}</p>
+          <p className="text-xs text-green-600 mt-1">Expected profit from all stock</p>
+        </div>
+        <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-1">
+            <DollarSign className="w-4 h-4 text-blue-600" />
+            <p className="text-sm text-blue-700 font-medium">Inventory Value</p>
+          </div>
+          <p className="text-2xl font-bold text-blue-700">{formatCurrency(totalInventoryValue)}</p>
+          <p className="text-xs text-blue-600 mt-1">Total value at selling price</p>
+        </div>
+        <div className="bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 rounded-xl p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-1">
+            <Package className="w-4 h-4 text-purple-600" />
+            <p className="text-sm text-purple-700 font-medium">Avg Profit Margin</p>
+          </div>
+          <p className="text-2xl font-bold text-purple-700">{avgProfitMargin.toFixed(1)}%</p>
+          <p className="text-xs text-purple-600 mt-1">Average margin across products</p>
+        </div>
+      </div>
+
       {/* Search Bar */}
       <div className="relative mb-6">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -592,8 +685,23 @@ const Inventory = () => {
                   <div className="p-4">
                     <div className="flex items-start justify-between mb-1">
                       <h4 className="font-semibold text-gray-900 text-lg">{item.name}</h4>
-                      <span className="text-sm font-bold text-blue-600">KES {item.price?.toFixed(2) || '0.00'}</span>
+                      <div className="text-right">
+                        <span className="text-sm font-bold text-blue-600">{formatCurrency(item.price)}</span>
+                        <div className="text-xs text-gray-500">Cost: {formatCurrency(item.cost)}</div>
+                      </div>
                     </div>
+                    
+                    {/* Profit Display */}
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`text-xs font-medium ${getProfitColor(item.profit_margin_percentage)}`}>
+                        Profit: {formatCurrency(item.expected_profit_per_unit)}/unit
+                      </span>
+                      <span className="text-xs text-gray-400">|</span>
+                      <span className={`text-xs font-medium ${getProfitColor(item.profit_margin_percentage)}`}>
+                        {item.profit_margin_percentage?.toFixed(1)}% margin
+                      </span>
+                    </div>
+
                     <div className="flex items-center gap-2 mb-3">
                       <span className="text-xs px-2 py-0.5 bg-gray-100 rounded-full text-gray-600">
                         Limit: {item.stock_limit} units
@@ -633,6 +741,13 @@ const Inventory = () => {
                       </div>
                       <div className="flex items-center gap-1">
                         <button 
+                          onClick={() => handleViewHistory(item)}
+                          className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                          title="View Price History"
+                        >
+                          <Clock className="w-4 h-4 text-gray-400 hover:text-purple-600" />
+                        </button>
+                        <button 
                           onClick={() => handleEdit(item)}
                           className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
                         >
@@ -662,6 +777,9 @@ const Inventory = () => {
                       <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Product</th>
                       <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">SKU</th>
                       <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Price</th>
+                      <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Cost</th>
+                      <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Profit/Unit</th>
+                      <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Margin</th>
                       <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Stock</th>
                       <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Limit</th>
                       <th className="text-left py-3.5 px-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
@@ -671,7 +789,7 @@ const Inventory = () => {
                   <tbody>
                     {filteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan="7" className="text-center py-12 text-gray-500">
+                        <td colSpan="10" className="text-center py-12 text-gray-500">
                           <ShoppingBag className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                           <p className="text-lg font-medium">No products found</p>
                           <p className="text-sm">Try adjusting your search</p>
@@ -700,17 +818,24 @@ const Inventory = () => {
                             </div>
                           </td>
                           <td className="py-3 px-4 text-gray-600">{item.sku}</td>
-                          <td className="py-3 px-4 font-medium text-blue-600">KES {item.price?.toFixed(2) || '0.00'}</td>
+                          <td className="py-3 px-4 font-medium text-blue-600">{formatCurrency(item.price)}</td>
+                          <td className="py-3 px-4 text-gray-600">{formatCurrency(item.cost)}</td>
+                          <td className={`py-3 px-4 font-medium ${getProfitColor(item.profit_margin_percentage)}`}>
+                            {formatCurrency(item.expected_profit_per_unit)}
+                          </td>
+                          <td className={`py-3 px-4 font-medium ${getProfitColor(item.profit_margin_percentage)}`}>
+                            {item.profit_margin_percentage?.toFixed(1)}%
+                          </td>
                           <td className="py-3 px-4">
                             <span className={`font-medium ${
-                              item.stock >= item.stock_limit ? 'text-green-600' : 
-                              item.stock > 0 ? 'text-blue-600' : 
+                              (item.stock || 0) >= (item.stock_limit || 0) ? 'text-green-600' : 
+                              (item.stock || 0) > 0 ? 'text-blue-600' : 
                               'text-red-600'
                             }`}>
-                              {item.stock}
+                              {item.stock || 0}
                             </span>
                           </td>
-                          <td className="py-3 px-4 text-gray-600">{item.stock_limit}</td>
+                          <td className="py-3 px-4 text-gray-600">{item.stock_limit || 0}</td>
                           <td className="py-3 px-4">
                             <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${getStatusColor(item.status)}`}>
                               {getStatusIcon(item.status)}
@@ -719,29 +844,13 @@ const Inventory = () => {
                           </td>
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-2">
-                              {/* Quantity Controls in Table */}
-                              <div className="flex items-center gap-1">
-                                <button 
-                                  onClick={() => handleQuantityChange(item.id, -1)}
-                                  disabled={item.stock <= 0}
-                                  className={`p-1 rounded border transition-colors ${
-                                    item.stock <= 0
-                                      ? 'border-gray-200 text-gray-300 cursor-not-allowed'
-                                      : 'border-gray-200 hover:border-blue-400 hover:bg-blue-50'
-                                  }`}
-                                >
-                                  <Minus className={`w-3 h-3 ${item.stock > 0 ? 'text-gray-600' : 'text-gray-300'}`} />
-                                </button>
-                                <span className="w-6 text-center font-medium text-gray-900 text-xs">
-                                  {quantities[item.id] || 0}
-                                </span>
-                                <button 
-                                  onClick={() => handleQuantityChange(item.id, 1)}
-                                  className="p-1 rounded border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors"
-                                >
-                                  <PlusIcon className="w-3 h-3 text-gray-600" />
-                                </button>
-                              </div>
+                              <button 
+                                onClick={() => handleViewHistory(item)}
+                                className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+                                title="View Price History"
+                              >
+                                <Clock className="w-4 h-4 text-gray-400 hover:text-purple-600" />
+                              </button>
                               <button 
                                 onClick={() => handleEdit(item)}
                                 className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
@@ -876,7 +985,7 @@ const Inventory = () => {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Price (KES) *
+                    Selling Price (KES) *
                   </label>
                   <input
                     type="number"
@@ -904,6 +1013,41 @@ const Inventory = () => {
                   />
                 </div>
               </div>
+
+              {/* Profit Preview */}
+              {formData.price && formData.cost && (
+                <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                  <p className="text-sm font-medium text-gray-700 mb-1">Expected Profit Preview</p>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <span className="text-gray-500">Profit/Unit:</span>
+                      <span className={`ml-1 font-medium ${getProfitColor(
+                        ((parseFloat(formData.price) - parseFloat(formData.cost)) / parseFloat(formData.price)) * 100
+                      )}`}>
+                        {formatCurrency(parseFloat(formData.price) - parseFloat(formData.cost))}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Margin:</span>
+                      <span className={`ml-1 font-medium ${getProfitColor(
+                        ((parseFloat(formData.price) - parseFloat(formData.cost)) / parseFloat(formData.price)) * 100
+                      )}`}>
+                        {parseFloat(formData.price) > 0 
+                          ? (((parseFloat(formData.price) - parseFloat(formData.cost)) / parseFloat(formData.price)) * 100).toFixed(1) 
+                          : 0}%
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Total Profit:</span>
+                      <span className={`ml-1 font-medium ${getProfitColor(
+                        ((parseFloat(formData.price) - parseFloat(formData.cost)) / parseFloat(formData.price)) * 100
+                      )}`}>
+                        {formatCurrency((parseFloat(formData.price) - parseFloat(formData.cost)) * (parseInt(formData.stock) || 0))}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -965,6 +1109,99 @@ const Inventory = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Price History Modal */}
+      {showHistoryModal && selectedProduct && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">Price History</h3>
+                <p className="text-sm text-gray-500">{selectedProduct.name} ({selectedProduct.sku})</p>
+              </div>
+              <button 
+                onClick={() => setShowHistoryModal(false)}
+                className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-6 h-6 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1">
+              {selectedProduct.price_history && selectedProduct.price_history.length > 0 ? (
+                <div className="space-y-2">
+                  {selectedProduct.price_history.slice().reverse().map((entry, index) => (
+                    <div key={index} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-500">
+                          {new Date(entry.date).toLocaleString()}
+                        </span>
+                        {entry.old_price !== entry.new_price && (
+                          <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
+                            Price Changed
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-sm">
+                        <div>
+                          <span className="text-gray-500">Selling Price</span>
+                          <div className="flex items-center gap-1">
+                            {entry.old_price !== entry.new_price ? (
+                              <>
+                                <span className="text-red-500 line-through">{formatCurrency(entry.old_price)}</span>
+                                <span className="text-green-600 font-medium">{formatCurrency(entry.new_price)}</span>
+                              </>
+                            ) : (
+                              <span className="text-gray-700">{formatCurrency(entry.new_price)}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Cost</span>
+                          <div className="flex items-center gap-1">
+                            {entry.old_cost !== entry.new_cost ? (
+                              <>
+                                <span className="text-red-500 line-through">{formatCurrency(entry.old_cost)}</span>
+                                <span className="text-green-600 font-medium">{formatCurrency(entry.new_cost)}</span>
+                              </>
+                            ) : (
+                              <span className="text-gray-700">{formatCurrency(entry.new_cost)}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Profit/Unit</span>
+                          <span className={`font-medium ${getProfitColor(
+                            entry.new_price > 0 ? ((entry.new_price - entry.new_cost) / entry.new_price) * 100 : 0
+                          )}`}>
+                            {formatCurrency(entry.new_profit)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  <Clock className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                  <p className="text-lg font-medium">No price history yet</p>
+                  <p className="text-sm">Price changes will be tracked here</p>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Current Price: {formatCurrency(selectedProduct.price)}</span>
+                <span className="text-gray-600">Current Cost: {formatCurrency(selectedProduct.cost)}</span>
+                <span className={`font-medium ${getProfitColor(selectedProduct.profit_margin_percentage)}`}>
+                  Profit: {formatCurrency(selectedProduct.expected_profit_per_unit)}/unit
+                </span>
+              </div>
+            </div>
           </div>
         </div>
       )}
