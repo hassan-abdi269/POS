@@ -3,7 +3,7 @@
 import axios from 'axios';
 
 // ✅ Use localhost for better browser cookie handling
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = 'https://api.nothernken.com/api';
 
 // Create axios instance with default config
 const api = axios.create({
@@ -46,28 +46,51 @@ api.interceptors.request.use(
 // ✅ Response interceptor
 api.interceptors.response.use(
   (response) => {
-    console.log('✅ [API] Response:', response.status, response.config.url);
-    console.log('🍪 Cookies after response:', document.cookie);
+    console.log(
+      '✅ [API] Response:',
+      response.status,
+      response.config.url
+    );
+
+    // tirsi_session is HttpOnly, so document.cookie cannot read it.
+    // The browser still sends it automatically because withCredentials=true.
+
     return response;
   },
   (error) => {
-    console.error('❌ [API] Response error:', error.response?.status, error.response?.config?.url);
-    
+    const status = error.response?.status;
+    const url = error.config?.url || '';
+
+    console.error(
+      '❌ [API] Response error:',
+      status,
+      url
+    );
+
     if (!error.response) {
-      console.error('Network error - please check your connection');
-      return Promise.reject(new Error('Network error. Please check your connection.'));
+      console.error('❌ Network error:', error.message);
+      return Promise.reject(error);
     }
-    
-    // Handle 401 - session expired
-    if (error.response?.status === 401) {
-      console.error('🔒 Session expired - Redirecting to login');
+
+    // Do not treat normal login/session-check 401 responses
+    // as an expired authenticated session.
+    if (
+      status === 401 &&
+      !url.includes('/auth/login') &&
+      !url.includes('/auth/session-check')
+    ) {
+      console.error('🔒 Session expired');
+
       localStorage.removeItem('user');
-      if (!window.location.pathname.includes('/login') && 
-          !window.location.pathname.includes('/superadmin/login')) {
+
+      if (
+        !window.location.pathname.includes('/login') &&
+        !window.location.pathname.includes('/superadmin/login')
+      ) {
         window.location.href = '/login';
       }
     }
-    
+
     return Promise.reject(error);
   }
 );
@@ -1750,4 +1773,4 @@ export default {
   upload: uploadService,
   reports: reportService,
   notifications: notificationService,
-};
+};
